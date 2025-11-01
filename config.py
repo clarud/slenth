@@ -43,10 +43,12 @@ class Settings(BaseSettings):
     celery_result_backend: RedisDsn = Field(..., env="CELERY_RESULT_BACKEND")
     celery_worker_concurrency: int = Field(default=4, env="CELERY_WORKER_CONCURRENCY")
     
-    # Vector DB provider selection
-    vector_db_provider: str = Field(default="qdrant", env="VECTOR_DB_PROVIDER")
-
-    # Qdrant
+    # Pinecone (for vector storage)
+    pinecone_api_key: str = Field(..., env="PINECONE_API_KEY")
+    pinecone_internal_index_host: str = Field(..., env="PINECONE_INTERNAL_INDEX_HOST")
+    pinecone_external_index_host: str = Field(..., env="PINECONE_EXTERNAL_INDEX_HOST")
+    
+    # Qdrant (deprecated - keeping for backward compatibility)
     qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
     qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
     qdrant_api_key: Optional[str] = Field(default=None, env="QDRANT_API_KEY")
@@ -54,15 +56,7 @@ class Settings(BaseSettings):
         default="external_rules",
         env="QDRANT_COLLECTION_EXTERNAL_RULES"
     )
-    qdrant_collection_internal_rules: str = Field(
-        default="internal_rules",
-        env="QDRANT_COLLECTION_INTERNAL_RULES"
-    )
-
-    # Pinecone
-    pinecone_api_key: Optional[str] = Field(default=None, env="PINECONE_API_KEY")
-    pinecone_external_index_host: Optional[str] = Field(default=None, env="PINECONE_EXTERNAL_INDEX_HOST")
-    pinecone_internal_index_host: Optional[str] = Field(default=None, env="PINECONE_INTERNAL_INDEX_HOST")
+    qdrant_timeout: int = Field(default=30, env="QDRANT_TIMEOUT")
     
     # GROQ
     groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
