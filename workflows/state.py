@@ -78,6 +78,7 @@ class DocumentWorkflowState(TypedDict, total=False):
     # Input
     document: Dict[str, Any]  # Document metadata
     document_id: str
+    transaction_id: Optional[str]  # NEW: Transaction ID from API request (links to Part 1)
     file_path: str
     file_type: str
 
@@ -106,6 +107,8 @@ class DocumentWorkflowState(TypedDict, total=False):
 
     # CrossReference outputs
     cross_reference_findings: List[Dict[str, Any]]
+    part1_results: Optional[Dict[str, Any]]  # NEW: Part 1 transaction monitoring results
+    combined_assessment: Optional[Dict[str, Any]]  # NEW: LLM-combined Part 1 + Part 2 assessment
 
     # DocumentRisk outputs
     risk_score: float

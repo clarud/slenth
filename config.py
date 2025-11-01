@@ -3,14 +3,22 @@ Configuration management for SLENTH AML Monitoring System.
 Loads environment variables and provides typed configuration objects.
 """
 from pydantic_settings import BaseSettings
-from pydantic import Field, PostgresDsn, RedisDsn
+from pydantic_settings import SettingsConfigDict
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Any
 import os
 
 
 class Settings(BaseSettings):
     """Main application settings."""
+    # pydantic v2 settings config (ignore extra env keys; keep existing .env behavior)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
     
     # Application
     app_env: str = Field(default="development", env="APP_ENV")
@@ -51,8 +59,6 @@ class Settings(BaseSettings):
     # Vector DB provider selection (default to pinecone)
     vector_db_provider: str = Field(default="pinecone", env="VECTOR_DB_PROVIDER")
     
-    # GROQ
-    groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
     
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
@@ -60,6 +66,9 @@ class Settings(BaseSettings):
     # Unified LLM selector used by services/llm.py (prefer Groq)
     llm_provider: str = Field(default="groq", env="LLM_PROVIDER")
     llm_model: str = Field(default="llama3-70b-8192", env="LLM_MODEL")
+    
+    groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", env="GROQ_MODEL")
     
     # Embeddings
     embeddings_provider: str = Field(default="openai", env="EMBEDDINGS_PROVIDER")
@@ -95,16 +104,15 @@ class Settings(BaseSettings):
         env="FINMA_CIRCULARS_URL"
     )
     
-    # World-Check One
-    worldcheck_api_key: Optional[str] = Field(default=None, env="WORLDCHECK_API_KEY")
-    worldcheck_api_secret: Optional[str] = Field(default=None, env="WORLDCHECK_API_SECRET")
-    worldcheck_group_id: Optional[str] = Field(default=None, env="WORLDCHECK_GROUP_ID")
-    worldcheck_base_url: str = Field(
-        default="https://api-worldcheck.refinitiv.com/v2",
-        env="WORLDCHECK_BASE_URL"
+    # Dilisense API (Background Check Service)
+    dilisense_api_key: Optional[str] = Field(default=None, env="DILISENSE_API_KEY")
+    dilisense_base_url: str = Field(
+        default="https://api.dilisense.com/v1",
+        env="DILISENSE_BASE_URL"
     )
-    worldcheck_timeout: int = Field(default=30, env="WORLDCHECK_TIMEOUT")
-    worldcheck_max_retries: int = Field(default=3, env="WORLDCHECK_MAX_RETRIES")
+    dilisense_timeout: int = Field(default=30, env="DILISENSE_TIMEOUT")
+    dilisense_max_retries: int = Field(default=3, env="DILISENSE_MAX_RETRIES")
+    dilisense_enabled: bool = Field(default=True, env="DILISENSE_ENABLED")
     
     # File Storage
     upload_dir: str = Field(default="data/uploaded_docs", env="UPLOAD_DIR")
@@ -132,7 +140,30 @@ class Settings(BaseSettings):
     # Documents
     document_processing_timeout: int = Field(default=300, env="DOCUMENT_PROCESSING_TIMEOUT")
     document_max_pages: int = Field(default=100, env="DOCUMENT_MAX_PAGES")
+    document_allowed_types: List[str] = Field(default=["pdf"], env="DOCUMENT_ALLOWED_TYPES")  # PDF only for now
     image_max_size_mb: int = Field(default=20, env="IMAGE_MAX_SIZE_MB")
+
+    # Accept CSV or JSON array for list-like envs
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, v: Any):
+        if isinstance(v, str):
+            s = v.strip()
+            # If JSON-looking, let pydantic parse it as complex value
+            if (s.startswith("[") and s.endswith("]")) or (s.startswith("\"") and s.endswith("\"")):
+                return v
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return v
+
+    @field_validator("document_allowed_types", mode="before")
+    @classmethod
+    def _parse_document_allowed_types(cls, v: Any):
+        if isinstance(v, str):
+            s = v.strip()
+            if s.startswith("[") and s.endswith("]"):
+                return v
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return v
     
     # Feature Flags
     enable_background_check: bool = Field(default=True, env="ENABLE_BACKGROUND_CHECK")
