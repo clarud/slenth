@@ -5,7 +5,7 @@ Logic:
 
 1. Take query_strings from context
 2. Generate embeddings for each query
-3. Perform hybrid search on external_rules and internal_rules collections
+3. Perform hybrid search on external_rules (Qdrant) and internal_rules (Pinecone) collections
 4. Apply filters (jurisdiction, effective_date)
 5. Re-rank results by relevance
 6. Return top-k applicable rules with metadata
@@ -21,6 +21,8 @@ from typing import Any, Dict
 from agents import Part1Agent
 from services.llm import LLMService
 from services.vector_db import VectorDBService
+from services.pinecone_db import PineconeService
+from services.embeddings import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +30,20 @@ logger = logging.getLogger(__name__)
 class RetrievalAgent(Part1Agent):
     """Agent: Hybrid search (BM25 + vector) for applicable rules"""
 
-    def __init__(self, llm_service: LLMService = None, vector_service: VectorDBService = None):
+    def __init__(
+        self, 
+        llm_service: LLMService = None, 
+        vector_service: VectorDBService = None,
+        pinecone_internal: PineconeService = None,
+        pinecone_external: PineconeService = None,
+        embedding_service: EmbeddingService = None
+    ):
         super().__init__("retrieval")
         self.llm = llm_service
-        self.vector_db = vector_service
+        self.vector_db = vector_service  # Deprecated - for backward compatibility
+        self.pinecone_internal = pinecone_internal or PineconeService(index_type="internal")
+        self.pinecone_external = pinecone_external or PineconeService(index_type="external")
+        self.embeddings = embedding_service or EmbeddingService()
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -67,22 +79,23 @@ class RetrievalAgent(Part1Agent):
             for query in query_strings:
                 self.logger.info(f"Searching for query: {query[:100]}...")
 
-                # Search internal rules
-                internal_results = await self.vector_db.hybrid_search(
-                    collection_name="internal_rules",
-                    query_text=query,
-                    limit=10,
+                # Generate embedding for query
+                query_embedding = self.embeddings.embed_text(query)
+
+                # Search internal rules (Pinecone internal index)
+                internal_results = await self.pinecone_internal.similarity_search(
+                    query_vector=query_embedding,
+                    top_k=10,
                     filters={
                         "jurisdiction": jurisdiction,
                         "is_active": True,
                     }
                 )
 
-                # Search external rules
-                external_results = await self.vector_db.hybrid_search(
-                    collection_name="external_rules",
-                    query_text=query,
-                    limit=10,
+                # Search external rules (Pinecone external index)
+                external_results = await self.pinecone_external.similarity_search(
+                    query_vector=query_embedding,
+                    top_k=10,
                     filters={
                         "jurisdiction": jurisdiction,
                     }
