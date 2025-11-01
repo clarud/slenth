@@ -1,0 +1,115 @@
+# FastAPI and Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+websockets==12.0
+
+# Database - PostgreSQL (Cloud)
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+alembic==1.13.1
+
+# Redis and Celery (Part 1 only)
+redis==5.0.1
+celery==5.3.6
+flower==2.0.1
+
+# Vector Database - Qdrant
+qdrant-client==1.7.0
+
+# LangGraph and LangChain
+langgraph==0.0.20
+langchain==0.1.0
+langchain-openai==0.0.2
+langchain-anthropic==0.0.1
+langchain-community==0.0.10
+
+# LLM APIs
+openai==1.10.0
+anthropic==0.8.1
+
+# Embeddings
+sentence-transformers==2.3.1
+
+# Web Scraping and Crawling
+crawl4ai
+playwright==1.41.2
+beautifulsoup4==4.12.3
+lxml
+requests==2.31.0
+
+# PDF and OCR
+PyMuPDF==1.23.22
+pytesseract==0.3.10
+pdf2image==1.17.0
+Pillow==10.2.0
+
+# Image Forensics
+exifread==3.0.0
+opencv-python==4.9.0.80
+
+# NLP and Text Processing
+spacy==3.7.2
+transformers==4.37.2
+
+# Bayesian Inference
+pgmpy==0.1.23
+pomegranate==1.0.4
+
+# Search (BM25)
+rank-bm25==0.2.2
+
+# Data Processing
+pandas==2.2.0
+numpy==1.26.3
+
+# HTTP Client
+httpx
+
+# Environment Variables
+python-dotenv==1.0.1
+
+# Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Date/Time
+python-dateutil==2.8.2
+pytz==2024.1
+
+# CLI
+click==8.1.7
+rich==13.7.0
+
+# Testing (optional but recommended)
+pytest
+pytest-asyncio
+pytest-cov
+
+# Logging
+loguru==0.7.2
+
+# Background Jobs
+apscheduler==3.10.4
+
+# Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# JSON
+orjson==3.9.13
+
+# UUID
+shortuuid==1.0.13
+
+# Retry logic
+tenacity==8.2.3
+
+# File handling
+aiofiles
+
+# Markdown processing
+markdown==3.5.2
+
+# World-Check One API (LSEG)
+# Note: May require custom implementation or SDK if available
