@@ -14,8 +14,8 @@ redis==5.0.1
 celery==5.3.6
 flower==2.0.1
 
-# Vector Database - Qdrant
-qdrant-client==1.7.0
+# Pinecone (for internal rules)
+pinecone
 
 # LangGraph and LangChain
 langgraph==0.0.20

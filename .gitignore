@@ -1,1 +1,5 @@
 internal_rules/*
+
+# Python Environment
+slenth_env/
+.env
