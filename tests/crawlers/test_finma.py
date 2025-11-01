@@ -6,7 +6,7 @@ Tests the Swiss Financial Market Supervisory Authority circular scraper.
 
 import pytest
 from datetime import datetime
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, patch
 import asyncio
 
 from crawlers.finma import FINMACrawler
@@ -17,18 +17,17 @@ class TestFINMACrawler:
     
     def test_crawler_initialization(self):
         """Test crawler initializes with correct configuration"""
-        crawler = FINMACrawler()
+        crawler = FINMACrawler(use_cached_html=True)
         
         assert crawler.source == "FINMA"
         assert crawler.jurisdiction == "CH"
         assert "finma.ch" in crawler.base_url
     
-    @pytest.mark.asyncio
-    async def test_crawl_returns_circulars(self, clean_output_files, file_saver):
+    def test_crawl_returns_circulars(self, clean_output_files, file_saver):
         """Test that crawl method returns list of circulars and saves to output"""
-        crawler = FINMACrawler()
+        crawler = FINMACrawler(use_cached_html=True)
         
-        circulars = await crawler.crawl()
+        circulars = crawler.crawl()
         
         assert isinstance(circulars, list)
         assert len(circulars) > 0
@@ -49,12 +48,11 @@ class TestFINMACrawler:
             print(f"   Date: {sample['date']}")
             print(f"   Content length: {len(sample['content'])} chars")
     
-    @pytest.mark.asyncio
-    async def test_circular_structure(self):
+    def test_circular_structure(self):
         """Test that each circular has required fields"""
-        crawler = FINMACrawler()
+        crawler = FINMACrawler(use_cached_html=True)
         
-        circulars = await crawler.crawl()
+        circulars = crawler.crawl()
         
         assert len(circulars) > 0, "Should crawl at least one circular"
         
@@ -80,12 +78,11 @@ class TestFINMACrawler:
             assert len(circular["content"]) > 0, "Content should not be empty"
     
     
-    @pytest.mark.asyncio
-    async def test_pdf_content_extraction(self):
+    def test_pdf_content_extraction(self):
         """Test that PDFs are properly extracted with actual content"""
-        crawler = FINMACrawler()
+        crawler = FINMACrawler(use_cached_html=True)
         
-        circulars = await crawler.crawl()
+        circulars = crawler.crawl()
         
         assert len(circulars) > 0, "Should extract at least one circular"
         
@@ -101,12 +98,11 @@ class TestFINMACrawler:
             ])
             assert has_regulatory_content, f"Content doesn't seem like a regulatory document: {circular['title']}"
     
-    @pytest.mark.asyncio
-    async def test_swiss_date_format(self):
+    def test_swiss_date_format(self):
         """Test that Swiss date formats are handled correctly"""
-        crawler = FINMACrawler()
+        crawler = FINMACrawler(use_cached_html=True)
         
-        circulars = await crawler.crawl()
+        circulars = crawler.crawl()
         
         assert len(circulars) > 0
         
@@ -117,12 +113,11 @@ class TestFINMACrawler:
             assert date.year >= 2020
             assert date.year <= 2026
     
-    @pytest.mark.asyncio
-    async def test_multilingual_content(self):
+    def test_multilingual_content(self):
         """Test handling of multilingual content (German/English/French)"""
-        crawler = FINMACrawler()
+        crawler = FINMACrawler(use_cached_html=True)
         
-        circulars = await crawler.crawl()
+        circulars = crawler.crawl()
         
         assert len(circulars) > 0
         
@@ -209,15 +204,14 @@ class TestAllCrawlers:
 
 
 # Standalone test function for manual testing
-@pytest.mark.asyncio
-async def test_finma_crawler_manual():
+def test_finma_crawler_manual():
     """Manual test - can be run directly"""
     print("\n" + "="*60)
     print("FINMA Crawler Manual Test")
     print("="*60)
     
-    crawler = FINMACrawler()
-    circulars = await crawler.crawl()
+    crawler = FINMACrawler(use_cached_html=True)
+    circulars = crawler.crawl()
     
     print(f"\nFound {len(circulars)} circulars:")
     for i, circular in enumerate(circulars, 1):
@@ -232,4 +226,4 @@ async def test_finma_crawler_manual():
 
 
 if __name__ == "__main__":
-    asyncio.run(test_finma_crawler_manual())
+    test_finma_crawler_manual()

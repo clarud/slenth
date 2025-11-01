@@ -2,35 +2,45 @@
 Hong Kong Monetary Authority (HKMA) Regulatory Crawler
 
 Scrapes HKMA circulars and guidelines for AML/CFT regulations.
-Uses Crawl4AI to discover PDF links and extract PDF content without LLMs.
+Uses BeautifulSoup for HTML parsing, Selenium for JavaScript handling, and PyPDF2 for PDF extraction.
 """
 
 import logging
 import json
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urljoin
 from datetime import datetime
 from typing import List, Dict, Optional
-import asyncio
+from io import BytesIO
 
-# Crawl4AI imports (guarded)
-try:  # pragma: no cover - allow tests to patch AsyncWebCrawler
-    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, JsonCssExtractionStrategy  # type: ignore
-    from crawl4ai.async_configs import BrowserConfig  # type: ignore
-    from crawl4ai.processors.pdf import PDFCrawlerStrategy, PDFContentScrapingStrategy  # type: ignore
-except Exception:  # pragma: no cover
-    AsyncWebCrawler = None  # type: ignore
-    CrawlerRunConfig = None  # type: ignore
-    CacheMode = None  # type: ignore
-    JsonCssExtractionStrategy = None  # type: ignore
-    BrowserConfig = None  # type: ignore
-    PDFCrawlerStrategy = None  # type: ignore
-    PDFContentScrapingStrategy = None  # type: ignore
+# BeautifulSoup imports
+from bs4 import BeautifulSoup
+import requests
+import urllib3
 
-# Online-only toggle (default True): when True, no placeholder fallback is used
-ONLINE_ONLY = os.getenv("CRAWLER_ONLINE_ONLY", "true").lower() in {"1", "true", "yes"}
+# Selenium imports
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# PyPDF2 import
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    try:
+        from pypdf import PdfReader  # Alternative package name
+    except ImportError:
+        PdfReader = None
 
 logger = logging.getLogger(__name__)
 
@@ -38,221 +48,199 @@ logger = logging.getLogger(__name__)
 class HKMACrawler:
     """Crawler for HKMA regulatory circulars"""
     
-    def __init__(self):
-        self.base_url = "https://www.hkma.gov.hk/eng/regulatory-resources/regulatory-guides/"
+    def __init__(self, use_cached_html: bool = False):
+        self.base_url = "https://www.hkma.gov.hk/eng/key-functions/banking/anti-money-laundering-and-counter-financing-of-terrorism/guidance-papers-circulars/"
         self.source = "HKMA"
         self.jurisdiction = "HK"
+        self.use_cached_html = use_cached_html
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
     
-    async def crawl(self) -> List[Dict]:
+    def crawl(self) -> List[Dict]:
         """Crawl HKMA site: find PDF links and parse PDFs."""
         logger.info(f"Starting HKMA crawler from {self.base_url}")
 
-        # Enforce online-only by default
-        if AsyncWebCrawler is None or JsonCssExtractionStrategy is None:
-            msg = "Crawl4AI not available; online-only mode is enforced. Install crawl4ai to proceed."
+        if PdfReader is None:
+            msg = "PyPDF2 not available. Install pypdf2 to proceed."
             logger.error(msg)
             raise RuntimeError(msg)
 
-        # HKMA landing page lists links to detail pages; PDFs are on those pages
-        detail_links = await self._discover_detail_pages(self.base_url)
-        logger.info(f"HKMA discovered {len(detail_links)} detail pages")
-
-        use_downloads = os.getenv("CRAWLER_USE_DOWNLOADS", "false").lower() in {"1", "true", "yes"}
-        downloads_dir = os.getenv("CRAWLER_DOWNLOADS_DIR")
-
-        if use_downloads and BrowserConfig is not None:
-            downloaded_files: List[str] = []
-            for d in detail_links[:30]:
-                try:
-                    files = await self._download_pdfs_from_page(d["url"], downloads_dir)
-                    downloaded_files.extend(files)
-                except Exception as e:
-                    logger.warning(f"HKMA detail download failed {d.get('url')}: {e}")
-
-            logger.info(f"HKMA downloaded {len(downloaded_files)} files from detail pages")
-            circulars: List[Dict] = []
-            for path in downloaded_files[:50]:
-                try:
-                    local_path = str(Path(path).absolute())
-                    doc = await self._parse_pdf(local_path)
-                    title = doc.get("title") or Path(local_path).name
-                    content = doc.get("text", "")
-                    date = datetime.utcnow()
-                    circulars.append(
-                        {
-                            "title": title,
-                            "url": local_path,
-                            "date": date,
-                            "content": content,
-                            "source": self.source,
-                            "jurisdiction": self.jurisdiction,
-                            "rule_type": "circular",
-                        }
-                    )
-                except Exception as e:
-                    logger.error(f"HKMA local PDF parse failed for {path}: {e}")
-                    continue
-            logger.info(f"HKMA crawler produced {len(circulars)} circulars from downloads")
-            return circulars
+        # Get HTML content
+        if self.use_cached_html:
+            html_path = Path("hkma.html")
+            if not html_path.exists():
+                raise FileNotFoundError(f"Cached HTML file not found: {html_path}")
+            html_content = html_path.read_text(encoding="utf-8")
+            logger.info("Using cached HTML file")
         else:
-            pdf_links: List[Dict] = []
-            seen = set()
-            for d in detail_links[:30]:  # safety limit
-                try:
-                    found = await self._discover_pdf_links(d["url"])
-                    for f in found:
-                        key = f.get("url")
-                        if key and key not in seen:
-                            seen.add(key)
-                            pdf_links.append(f)
-                except Exception as e:
-                    logger.warning(f"HKMA detail crawl failed {d.get('url')}: {e}")
+            response = requests.get(self.base_url, headers=self.headers, timeout=30)
+            response.raise_for_status()
+            html_content = response.text
+            logger.info("Fetched HTML from live URL")
 
-            logger.info(f"HKMA aggregated {len(pdf_links)} PDF links from detail pages")
-            circulars: List[Dict] = []
+        # Parse HTML and extract PDF links
+        pdf_links = self._discover_pdf_links(html_content)
+        logger.info(f"HKMA discovered {len(pdf_links)} PDF links")
 
-            # Parse each PDF into text/metadata
-            for link in pdf_links[:25]:  # limit for safety
-                try:
-                    doc = await self._parse_pdf(link["url"])
-                    title = link.get("title") or doc.get("title") or "HKMA Circular"
-                    date = self._parse_date(link.get("date_text")) or datetime.utcnow()
-                    content = doc.get("text", "")
-
-                    circulars.append(
-                        {
-                            "title": title,
-                            "url": link["url"],
-                            "date": date,
-                            "content": content,
-                            "source": self.source,
-                            "jurisdiction": self.jurisdiction,
-                            "rule_type": "circular",
-                        }
-                    )
-                except Exception as e:
-                    logger.error(f"HKMA PDF parse failed for {link.get('url')}: {e}")
-                    continue
-
-            logger.info(f"HKMA crawler produced {len(circulars)} circulars")
-            return circulars
-
-    async def _discover_pdf_links(self, url: str) -> List[Dict]:
-        """Fetch a page and extract PDF links using CSS extraction (no LLM)."""
-        schema = {
-            "name": "pdf_links",
-            "baseSelector": "a",
-            "fields": [
-                {"name": "href", "type": "attribute", "attribute": "href"},
-                {"name": "text", "type": "text"},
-            ],
-        }
-        extraction = JsonCssExtractionStrategy(schema, verbose=False)
-        config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS, extraction_strategy=extraction)
-
-        links: List[Dict] = []
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=config)
-            if not getattr(result, "success", False):
-                return links
+        # Parse each PDF
+        circulars: List[Dict] = []
+        for link in pdf_links[:25]:  # limit for safety
             try:
-                items = json.loads(result.extracted_content) if result.extracted_content else []
-            except Exception:
-                items = []
+                content = self._parse_pdf(link["url"])
+                title = link.get("title") or "HKMA Circular"
+                date = self._parse_date(link.get("date_text")) or datetime.utcnow()
 
-        for it in items or []:
-            href = (it.get("href") or "").strip()
-            if not href:
-                continue
-            if href.lower().endswith(".pdf"):
-                abs_url = urljoin(url, href)
-                links.append({
-                    "url": abs_url,
-                    "title": (it.get("text") or "").strip(),
-                    "date_text": (it.get("text") or "").strip(),
+                circulars.append({
+                    "title": title,
+                    "url": link["url"],
+                    "date": date,
+                    "content": content,
+                    "source": self.source,
+                    "jurisdiction": self.jurisdiction,
+                    "rule_type": "circular",
                 })
+            except Exception as e:
+                logger.error(f"HKMA PDF parse failed for {link.get('url')}: {e}")
+                continue
+
+        logger.info(f"HKMA crawler produced {len(circulars)} circulars")
+        return circulars
+
+    def _discover_pdf_links(self, html_content: str) -> List[Dict]:
+        """Extract PDF links from HTML using BeautifulSoup."""
+        soup = BeautifulSoup(html_content, 'lxml')
+        links: List[Dict] = []
+        
+        # Find all rows in the circulars table
+        rows = soup.select("div.template-table tbody tr")
+        logger.info(f"Found {len(rows)} table rows")
+        
+        for row in rows:
+            # Find PDF link in the row - inside .filter-head .active a
+            pdf_link = row.select_one(".filter-head .active a")
+            if not pdf_link:
+                continue
+                
+            href = pdf_link.get("href", "").strip()
+            if not href or ".pdf" not in href.lower():
+                continue
+            
+            # Make absolute URL
+            abs_url = urljoin(self.base_url, href)
+            
+            # Extract title
+            title = pdf_link.get_text(strip=True)
+            
+            # Extract date from the second column
+            date_cell = row.select_one("td[width='140px']")
+            date_text = date_cell.get_text(strip=True) if date_cell else ""
+            
+            links.append({
+                "url": abs_url,
+                "title": title,
+                "date_text": date_text,
+            })
+        
         return links
 
-    async def _discover_detail_pages(self, url: str) -> List[Dict]:
-        """Discover internal detail pages (non-PDF) from the landing page."""
-        schema = {
-            "name": "detail_links",
-            "baseSelector": "a",
-            "fields": [
-                {"name": "href", "type": "attribute", "attribute": "href"},
-                {"name": "text", "type": "text"},
-            ],
-        }
-        extraction = JsonCssExtractionStrategy(schema, verbose=False)
-        config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS, extraction_strategy=extraction)
-        pages: List[Dict] = []
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=config)
-            if not getattr(result, "success", False):
-                return pages
-            try:
-                items = json.loads(result.extracted_content) if result.extracted_content else []
-            except Exception:
-                items = []
+    def _parse_pdf(self, pdf_url: str) -> str:
+        """Fetch PDF using Selenium to handle redirects, then parse with PyPDF2."""
+        driver = None
+        try:
+            # Set up Chrome options for headless operation
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--ignore-certificate-errors")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
+            
+            # Initialize Chrome driver
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+            # Navigate to PDF URL (will redirect to landing page)
+            driver.get(pdf_url)
+            
+            # Wait for page to load
+            time.sleep(3)
+            
+            # Get the final URL after redirects
+            final_url = driver.current_url
+            logger.info(f"Redirected from {pdf_url} to {final_url}")
+            
+            # Parse the landing page to find the actual PDF download link
+            soup = BeautifulSoup(driver.page_source, 'lxml')
+            
+            # Look for PDF download links
+            actual_pdf_url = None
+            
+            # Method 1: Look for links with .pdf extension
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                if '.pdf' in href.lower():
+                    # Make absolute URL
+                    if href.startswith('http'):
+                        actual_pdf_url = href
+                    elif href.startswith('/'):
+                        # Relative to domain
+                        base = final_url.split('/')[0] + '//' + final_url.split('/')[2]
+                        actual_pdf_url = base + href
+                    else:
+                        actual_pdf_url = urljoin(final_url, href)
+                    logger.info(f"Found PDF link: {actual_pdf_url}")
+                    break
+            
+            # Method 2: Try clicking download button if no direct link found
+            if not actual_pdf_url:
+                try:
+                    download_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Download')] | //a[contains(text(), 'Download')]")
+                    onclick = download_btn.get_attribute('onclick')
+                    href = download_btn.get_attribute('href')
+                    if href:
+                        actual_pdf_url = href if href.startswith('http') else urljoin(final_url, href)
+                        logger.info(f"Found PDF from download button href: {actual_pdf_url}")
+                except:
+                    pass
+            
+            # If we found the actual PDF URL, download it
+            if actual_pdf_url:
+                response = requests.get(actual_pdf_url, headers=self.headers, timeout=30, verify=False)
+            else:
+                # Fallback: try the final URL directly
+                logger.warning(f"Could not find PDF link on landing page, trying final URL: {final_url}")
+                response = requests.get(final_url, headers=self.headers, timeout=30, verify=False)
+            
+            response.raise_for_status()
 
-        for it in items or []:
-            href = (it.get("href") or "").strip()
-            if not href:
-                continue
-            if href.lower().endswith(".pdf"):
-                continue
-            abs_url = urljoin(url, href)
-            # Keep only HKMA domain links
-            if "hkma.gov.hk" not in abs_url:
-                continue
-            pages.append({
-                "url": abs_url,
-                "title": (it.get("text") or "").strip(),
-            })
-        return pages
-
-    async def _download_pdfs_from_page(self, url: str, download_dir: Optional[str]) -> List[str]:
-        """Use BrowserConfig to click .pdf links on a page and collect downloaded file paths."""
-        if BrowserConfig is None:
-            return []
-        target_dir = download_dir or os.path.join(os.getcwd(), "crawler_downloads")
-        os.makedirs(target_dir, exist_ok=True)
-
-        browser_cfg = BrowserConfig(accept_downloads=True, downloads_path=target_dir)
-        run_cfg = CrawlerRunConfig(
-            js_code="""
-                const links = Array.from(document.querySelectorAll('a[href$=".pdf"]'));
-                for (const [i, link] of links.entries()) {
-                    link.click();
-                    await new Promise(r => setTimeout(r, 400));
-                }
-            """,
-            wait_for=8,
-        )
-        files: List[str] = []
-        async with AsyncWebCrawler(config=browser_cfg, verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=run_cfg)
-            dl = getattr(result, "downloaded_files", None)
-            if dl:
-                files.extend([str(p) for p in dl])
-        return files
-
-    async def _parse_pdf(self, pdf_url: str) -> Dict:
-        """Download and parse a PDF into text + metadata using Crawl4AI PDF strategies."""
-        pdf_scraper = PDFContentScrapingStrategy(extract_images=False, save_images_locally=False)
-        run_cfg = CrawlerRunConfig(scraping_strategy=pdf_scraper)
-        async with AsyncWebCrawler(crawler_strategy=PDFCrawlerStrategy(), verbose=False) as crawler:
-            result = await crawler.arun(url=pdf_url, config=run_cfg)
-            if not getattr(result, "success", False):
-                raise RuntimeError(getattr(result, "error_message", "PDF crawl failed"))
-
-            text = ""
-            md = getattr(result, "markdown", None)
-            if md is not None and hasattr(md, "raw_markdown"):
-                text = md.raw_markdown or ""
-            meta = getattr(result, "metadata", {}) or {}
-            title = meta.get("title") or ""
-            return {"text": text, "title": title, "metadata": meta}
+            # Parse PDF with PyPDF2
+            pdf_file = BytesIO(response.content)
+            reader = PdfReader(pdf_file)
+            
+            # Extract text from ALL pages
+            text_parts = []
+            for page_num, page in enumerate(reader.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(page_text)
+                except Exception as e:
+                    logger.warning(f"Failed to extract page {page_num} from {pdf_url}: {e}")
+                    continue
+            
+            text = "\n\n".join(text_parts)
+            return text
+            
+        except Exception as e:
+            logger.error(f"Failed to parse PDF {pdf_url}: {e}")
+            raise
+        finally:
+            if driver:
+                driver.quit()
 
     def _parse_date(self, text: Optional[str]) -> Optional[datetime]:
         if not text:
@@ -400,14 +388,14 @@ class HKMACrawler:
         return saved_count
 
 
-async def main():
+def main():
     """Test the crawler"""
-    crawler = HKMACrawler()
-    circulars = await crawler.crawl()
+    crawler = HKMACrawler(use_cached_html=True)
+    circulars = crawler.crawl()
     print(f"Found {len(circulars)} circulars")
     for circular in circulars:
         print(f"- {circular['title']} ({circular['date']})")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

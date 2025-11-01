@@ -47,22 +47,19 @@ class Settings(BaseSettings):
     pinecone_api_key: str = Field(..., env="PINECONE_API_KEY")
     pinecone_internal_index_host: str = Field(..., env="PINECONE_INTERNAL_INDEX_HOST")
     pinecone_external_index_host: str = Field(..., env="PINECONE_EXTERNAL_INDEX_HOST")
-    
-    # Qdrant (deprecated - keeping for backward compatibility)
-    qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
-    qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
-    qdrant_api_key: Optional[str] = Field(default=None, env="QDRANT_API_KEY")
-    qdrant_collection_external_rules: str = Field(
-        default="external_rules",
-        env="QDRANT_COLLECTION_EXTERNAL_RULES"
-    )
-    qdrant_timeout: int = Field(default=30, env="QDRANT_TIMEOUT")
+
+    # Vector DB provider selection (default to pinecone)
+    vector_db_provider: str = Field(default="pinecone", env="VECTOR_DB_PROVIDER")
     
     # GROQ
     groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
     
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
+
+    # Unified LLM selector used by services/llm.py (prefer Groq)
+    llm_provider: str = Field(default="groq", env="LLM_PROVIDER")
+    llm_model: str = Field(default="llama3-70b-8192", env="LLM_MODEL")
     
     # Embeddings
     embeddings_provider: str = Field(default="openai", env="EMBEDDINGS_PROVIDER")
