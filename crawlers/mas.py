@@ -2,7 +2,7 @@
 Monetary Authority of Singapore (MAS) Regulatory Crawler
 
 Scrapes MAS notices and guidelines for AML/CFT regulations.
-Uses Crawl4AI to discover PDF links and extract PDF content without LLMs.
+Uses BeautifulSoup for HTML parsing and PyPDF2 for PDF extraction.
 """
 
 import logging
@@ -13,120 +13,83 @@ from pathlib import Path
 from urllib.parse import urljoin
 from datetime import datetime
 from typing import List, Dict, Optional
-import asyncio
+from io import BytesIO
+
+# BeautifulSoup imports
+from bs4 import BeautifulSoup
+import requests
+import urllib3
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# PyPDF2 import
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        PdfReader = None
 
 logger = logging.getLogger(__name__)
-
-# Crawl4AI imports (guarded)
-try:  # pragma: no cover
-    from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, JsonCssExtractionStrategy  # type: ignore
-    from crawl4ai.async_configs import BrowserConfig  # type: ignore
-    from crawl4ai.processors.pdf import PDFCrawlerStrategy, PDFContentScrapingStrategy  # type: ignore
-except Exception:  # pragma: no cover
-    AsyncWebCrawler = None  # type: ignore
-    CrawlerRunConfig = None  # type: ignore
-    CacheMode = None  # type: ignore
-    JsonCssExtractionStrategy = None  # type: ignore
-    BrowserConfig = None  # type: ignore
-    PDFCrawlerStrategy = None  # type: ignore
-    PDFContentScrapingStrategy = None  # type: ignore
-
-# Online-only toggle (default True)
-ONLINE_ONLY = os.getenv("CRAWLER_ONLINE_ONLY", "true").lower() in {"1", "true", "yes"}
 
 
 class MASCrawler:
     """Crawler for MAS regulatory notices"""
     
-    def __init__(self):
+    def __init__(self, use_cached_html: bool = False):
         self.base_url = "https://www.mas.gov.sg/regulation/notices"
         self.source = "MAS"
         self.jurisdiction = "SG"
+        self.use_cached_html = use_cached_html
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
     
-    async def crawl(self) -> List[Dict]:
+    def crawl(self) -> List[Dict]:
         """Crawl MAS site: find PDF links and parse PDFs."""
         logger.info(f"Starting MAS crawler from {self.base_url}")
 
-        if AsyncWebCrawler is None or JsonCssExtractionStrategy is None:
-            msg = "Crawl4AI not available; online-only mode is enforced. Install crawl4ai to proceed."
+        if PdfReader is None:
+            msg = "PyPDF2 not available. Install pypdf2 to proceed."
             logger.error(msg)
             raise RuntimeError(msg)
 
-        # MAS landing page links to detail pages; PDFs are on those pages
-        detail_links = await self._discover_detail_pages(self.base_url)
-        logger.info(f"MAS discovered {len(detail_links)} detail pages")
+        # Get HTML content
+        if self.use_cached_html:
+            html_path = Path("mas.html")
+            if not html_path.exists():
+                raise FileNotFoundError(f"Cached HTML file not found: {html_path}")
+            html_content = html_path.read_text(encoding="utf-8")
+            logger.info("Using cached HTML file")
+        else:
+            response = requests.get(self.base_url, headers=self.headers, timeout=30)
+            response.raise_for_status()
+            html_content = response.text
+            logger.info("Fetched HTML from live URL")
 
-        use_downloads = os.getenv("CRAWLER_USE_DOWNLOADS", "false").lower() in {"1", "true", "yes"}
-        downloads_dir = os.getenv("CRAWLER_DOWNLOADS_DIR")
+        # Parse HTML and extract PDF links
+        pdf_links = self._discover_pdf_links(html_content)
+        logger.info(f"MAS discovered {len(pdf_links)} PDF links")
 
-        if use_downloads and BrowserConfig is not None:
-            downloaded_files: List[str] = []
-            for d in detail_links[:30]:
-                try:
-                    files = await self._download_pdfs_from_page(d["url"], downloads_dir)
-                    downloaded_files.extend(files)
-                except Exception as e:
-                    logger.warning(f"MAS detail download failed {d.get('url')}: {e}")
-
-            logger.info(f"MAS downloaded {len(downloaded_files)} files from detail pages")
-            notices: List[Dict] = []
-            for path in downloaded_files[:50]:
-                try:
-                    local_path = str(Path(path).absolute())
-                    doc = await self._parse_pdf(local_path)
-                    title = doc.get("title") or Path(local_path).name
-                    content = doc.get("text", "")
-                    date = datetime.utcnow()
-                    notices.append(
-                        {
-                            "title": title,
-                            "url": local_path,
-                            "date": date,
-                            "content": content,
-                            "source": self.source,
-                            "jurisdiction": self.jurisdiction,
-                            "rule_type": "notice",
-                        }
-                    )
-                except Exception as e:
-                    logger.error(f"MAS local PDF parse failed for {path}: {e}")
-                    continue
-            logger.info(f"MAS crawler produced {len(notices)} notices from downloads")
-            return notices
-
-        pdf_links: List[Dict] = []
-        seen = set()
-        for d in detail_links[:30]:
-            try:
-                found = await self._discover_pdf_links(d["url"])
-                for f in found:
-                    key = f.get("url")
-                    if key and key not in seen:
-                        seen.add(key)
-                        pdf_links.append(f)
-            except Exception as e:
-                logger.warning(f"MAS detail crawl failed {d.get('url')}: {e}")
-
-        logger.info(f"MAS aggregated {len(pdf_links)} PDF links from detail pages")
-
+        # Parse each PDF
         notices: List[Dict] = []
-        for link in pdf_links[:25]:
+        for link in pdf_links[:25]:  # limit for safety
             try:
-                doc = await self._parse_pdf(link["url"])
-                title = link.get("title") or doc.get("title") or "MAS Notice"
+                content = self._parse_pdf(link["url"])
+                title = link.get("title") or "MAS Notice"
                 date = self._parse_date(link.get("date_text")) or datetime.utcnow()
-                content = doc.get("text", "")
-                notices.append(
-                    {
-                        "title": title,
-                        "url": link["url"],
-                        "date": date,
-                        "content": content,
-                        "source": self.source,
-                        "jurisdiction": self.jurisdiction,
-                        "rule_type": "notice",
-                    }
-                )
+
+                notices.append({
+                    "title": title,
+                    "url": link["url"],
+                    "date": date,
+                    "content": content,
+                    "source": self.source,
+                    "jurisdiction": self.jurisdiction,
+                    "rule_type": "notice",
+                })
             except Exception as e:
                 logger.error(f"MAS PDF parse failed for {link.get('url')}: {e}")
                 continue
@@ -134,119 +97,113 @@ class MASCrawler:
         logger.info(f"MAS crawler produced {len(notices)} notices")
         return notices
 
-    async def _discover_pdf_links(self, url: str) -> List[Dict]:
-        schema = {
-            "name": "pdf_links",
-            "baseSelector": "a",
-            "fields": [
-                {"name": "href", "type": "attribute", "attribute": "href"},
-                {"name": "text", "type": "text"},
-            ],
-        }
-        extraction = JsonCssExtractionStrategy(schema, verbose=False)
-        config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS, extraction_strategy=extraction)
+    def _discover_pdf_links(self, html_content: str) -> List[Dict]:
+        """Extract PDF links from HTML using BeautifulSoup."""
+        soup = BeautifulSoup(html_content, 'lxml')
         links: List[Dict] = []
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=config)
-            if not getattr(result, "success", False):
-                return links
-            try:
-                items = json.loads(result.extracted_content) if result.extracted_content else []
-            except Exception:
-                items = []
-
-        for it in items or []:
-            href = (it.get("href") or "").strip()
+        
+        # Find all search result cards
+        cards = soup.select("article.mas-search-card")
+        logger.info(f"Found {len(cards)} search cards")
+        
+        for card in cards:
+            # Find the main link
+            main_link = card.select_one("a.ola-link.mas-link")
+            if not main_link:
+                continue
+                
+            href = main_link.get("href", "").strip()
             if not href:
                 continue
-            if href.lower().endswith(".pdf"):
-                abs_url = urljoin(url, href)
+            
+            # Make absolute URL
+            abs_url = urljoin(self.base_url, href)
+            
+            # Extract title
+            title = main_link.get_text(strip=True)
+            
+            # Extract date from ancillaries
+            date_elem = card.select_one(".mas-ancillaries")
+            date_text = date_elem.get_text(strip=True) if date_elem else ""
+            
+            # Check if this links to a PDF directly or to a detail page
+            if ".pdf" in href.lower():
+                # Direct PDF link
                 links.append({
                     "url": abs_url,
-                    "title": (it.get("text") or "").strip(),
-                    "date_text": (it.get("text") or "").strip(),
+                    "title": title,
+                    "date_text": date_text,
                 })
+            else:
+                # Detail page - need to fetch and find PDF links
+                try:
+                    detail_pdfs = self._find_pdfs_on_page(abs_url)
+                    for pdf_url in detail_pdfs:
+                        links.append({
+                            "url": pdf_url,
+                            "title": title,
+                            "date_text": date_text,
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to extract PDFs from detail page {abs_url}: {e}")
+        
         return links
 
-    async def _discover_detail_pages(self, url: str) -> List[Dict]:
-        schema = {
-            "name": "detail_links",
-            "baseSelector": "a",
-            "fields": [
-                {"name": "href", "type": "attribute", "attribute": "href"},
-                {"name": "text", "type": "text"},
-            ],
-        }
-        extraction = JsonCssExtractionStrategy(schema, verbose=False)
-        config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS, extraction_strategy=extraction)
-        pages: List[Dict] = []
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=config)
-            if not getattr(result, "success", False):
-                return pages
-            try:
-                items = json.loads(result.extracted_content) if result.extracted_content else []
-            except Exception:
-                items = []
-
-        for it in items or []:
-            href = (it.get("href") or "").strip()
-            if not href:
-                continue
-            if href.lower().endswith(".pdf"):
-                continue
-            abs_url = urljoin(url, href)
-            if "mas.gov.sg" not in abs_url:
-                continue
-            pages.append({
-                "url": abs_url,
-                "title": (it.get("text") or "").strip(),
-            })
-        return pages
-
-    async def _download_pdfs_from_page(self, url: str, download_dir: Optional[str]) -> List[str]:
-        if BrowserConfig is None:
+    def _find_pdfs_on_page(self, url: str) -> List[str]:
+        """Find PDF links on a detail page."""
+        try:
+            response = requests.get(url, headers=self.headers, timeout=30, verify=False)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'lxml')
+            
+            pdf_urls = []
+            # Find all links that point to PDFs
+            for link in soup.select("a[href]"):
+                href = link.get("href", "").strip()
+                if ".pdf" in href.lower():
+                    abs_url = urljoin(url, href)
+                    pdf_urls.append(abs_url)
+            
+            return pdf_urls
+        except Exception as e:
+            logger.error(f"Failed to fetch detail page {url}: {e}")
             return []
-        target_dir = download_dir or os.path.join(os.getcwd(), "crawler_downloads")
-        os.makedirs(target_dir, exist_ok=True)
 
-        browser_cfg = BrowserConfig(accept_downloads=True, downloads_path=target_dir)
-        run_cfg = CrawlerRunConfig(
-            js_code="""
-                const links = Array.from(document.querySelectorAll('a[href$=".pdf"]'));
-                for (const [i, link] of links.entries()) {
-                    link.click();
-                    await new Promise(r => setTimeout(r, 400));
-                }
-            """,
-            wait_for=8,
-        )
-        files: List[str] = []
-        async with AsyncWebCrawler(config=browser_cfg, verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=run_cfg)
-            dl = getattr(result, "downloaded_files", None)
-            if dl:
-                files.extend([str(p) for p in dl])
-        return files
-
-    async def _parse_pdf(self, pdf_url: str) -> Dict:
-        pdf_scraper = PDFContentScrapingStrategy(extract_images=False, save_images_locally=False)
-        run_cfg = CrawlerRunConfig(scraping_strategy=pdf_scraper)
-        async with AsyncWebCrawler(crawler_strategy=PDFCrawlerStrategy(), verbose=False) as crawler:
-            result = await crawler.arun(url=pdf_url, config=run_cfg)
-            if not getattr(result, "success", False):
-                raise RuntimeError(getattr(result, "error_message", "PDF crawl failed"))
-            text = ""
-            md = getattr(result, "markdown", None)
-            if md is not None and hasattr(md, "raw_markdown"):
-                text = md.raw_markdown or ""
-            meta = getattr(result, "metadata", {}) or {}
-            title = meta.get("title") or ""
-            return {"text": text, "title": title, "metadata": meta}
+    def _parse_pdf(self, pdf_url: str) -> str:
+        """Download and parse a PDF into text using PyPDF2."""
+        try:
+            # Download PDF
+            response = requests.get(pdf_url, headers=self.headers, timeout=30, verify=False)
+            response.raise_for_status()
+            
+            # Parse PDF with PyPDF2
+            pdf_file = BytesIO(response.content)
+            reader = PdfReader(pdf_file)
+            
+            # Extract text from ALL pages
+            text_parts = []
+            for page_num, page in enumerate(reader.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(page_text)
+                except Exception as e:
+                    logger.warning(f"Failed to extract page {page_num} from {pdf_url}: {e}")
+                    continue
+            
+            text = "\n\n".join(text_parts)
+            return text
+            
+        except Exception as e:
+            logger.error(f"Failed to parse PDF {pdf_url}: {e}")
+            raise
 
     def _parse_date(self, text: Optional[str]) -> Optional[datetime]:
+        """Parse date from text."""
         if not text:
             return None
+        
+        # Try patterns like '20 January 2024', '2024-01-20'
         patterns = [
             r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})",
             r"(\d{4})-(\d{2})-(\d{2})",
@@ -255,18 +212,8 @@ class MASCrawler:
             m.lower(): i
             for i, m in enumerate(
                 [
-                    "January",
-                    "February",
-                    "March",
-                    "April",
-                    "May",
-                    "June",
-                    "July",
-                    "August",
-                    "September",
-                    "October",
-                    "November",
-                    "December",
+                    "January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December",
                 ],
                 1,
             )
@@ -288,13 +235,109 @@ class MASCrawler:
                 continue
         return None
 
+    def save_to_db(self, notices: List[Dict], db_session):
+        """
+        Save crawled notices to external_rules table.
+        
+        Args:
+            notices: List of notice dictionaries
+            db_session: Database session
+        """
+        from db.models import ExternalRule
+        from services.embeddings import EmbeddingService
+        from services.vector_db import VectorDBService
+        
+        embedding_service = EmbeddingService()
+        vector_db = VectorDBService()
+        
+        saved_count = 0
+        
+        # Optional file-saving mode for tests
+        save_path = os.getenv("CRAWLER_SAVE_TO_FILE")
+
+        for notice in notices:
+            try:
+                # Generate embedding
+                embedding = embedding_service.embed_text(notice["content"])
+
+                if save_path:
+                    # File-saving mode
+                    out = Path(save_path)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    payload = {
+                        **notice,
+                        "metadata": {"crawled_at": datetime.utcnow().isoformat()},
+                    }
+                    out.write_text((out.read_text(encoding="utf-8") if out.exists() else "") +
+                                    (json.dumps(payload, default=str) + "\n"), encoding="utf-8")
+
+                    vector_db.upsert_vectors(
+                        collection_name="external_rules",
+                        texts=[notice["content"]],
+                        vectors=[embedding],
+                        metadata=[{
+                            "title": notice["title"],
+                            "source": notice["source"],
+                            "jurisdiction": notice["jurisdiction"],
+                            "rule_type": notice["rule_type"],
+                        }],
+                    )
+
+                    saved_count += 1
+                    logger.info(f"Saved notice to file: {notice['title']}")
+                else:
+                    # Database mode
+                    existing = db_session.query(ExternalRule).filter(
+                        ExternalRule.source == notice["source"],
+                        ExternalRule.title == notice["title"]
+                    ).first()
+
+                    if existing:
+                        logger.info(f"Notice already exists: {notice['title']}")
+                        continue
+
+                    rule = ExternalRule(
+                        meta={
+                            "crawled_at": datetime.utcnow().isoformat(),
+                        }
+                    )
+                    db_session.add(rule)
+                    db_session.commit()
+
+                    vector_db.upsert_vectors(
+                        collection_name="external_rules",
+                        texts=[notice["content"]],
+                        vectors=[embedding],
+                        metadata=[{
+                            "rule_id": rule.rule_id,
+                            "title": rule.title,
+                            "description": rule.description,
+                            "source": rule.source,
+                            "jurisdiction": rule.jurisdiction,
+                            "rule_type": rule.rule_type,
+                        }],
+                    )
+
+                    saved_count += 1
+                    logger.info(f"Saved notice: {notice['title']}")
+                
+            except Exception as e:
+                logger.error(f"Error saving notice {notice.get('title')}: {str(e)}")
+                if not save_path:
+                    db_session.rollback()
+        
+        logger.info(f"MAS crawler saved {saved_count}/{len(notices)} new notices")
+        return saved_count
+
+
+def main():
+    """Test the crawler"""
+    crawler = MASCrawler(use_cached_html=True)
+    notices = crawler.crawl()
+    print(f"Found {len(notices)} MAS notices")
+    for notice in notices[:3]:
+        print(f"- {notice['title']} ({notice['date']})")
+
 
 if __name__ == "__main__":
-    async def main():
-        crawler = MASCrawler()
-        circulars = await crawler.crawl()
-        print(f"Found {len(circulars)} MAS circulars")
-        for c in circulars[:3]:
-            print("-", c["title"], c["date"], c["url"]) 
-
-    asyncio.run(main())
+    main()

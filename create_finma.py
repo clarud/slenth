@@ -1,4 +1,6 @@
-"""
+import os
+
+finma_code = '''"""
 Swiss Financial Market Supervisory Authority (FINMA) Regulatory Crawler
 Scrapes FINMA circulars using BeautifulSoup and PyPDF2.
 """
@@ -20,11 +22,10 @@ logger = logging.getLogger(__name__)
 class FINMACrawler:
     """Crawler for FINMA regulatory circulars"""
     
-    def __init__(self, use_cached_html: bool = False):
-        self.base_url = "https://www.finma.ch/en/documentation/circulars/"
+    def __init__(self):
+        self.base_url = "https://www.finma.ch/en/documentation/finma-circulars/"
         self.source = "FINMA"
         self.jurisdiction = "CH"
-        self.use_cached_html = use_cached_html
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -61,26 +62,17 @@ class FINMACrawler:
     def _discover_pdf_links(self, url: str) -> List[Dict]:
         """Discover PDF links from FINMA circulars page using BeautifulSoup."""
         try:
-            if self.use_cached_html:
-                # FINMA uses AJAX, so for testing/fallback we can use cached HTML
-                cached_path = os.path.join(os.path.dirname(__file__), '..', 'finma.html')
-                with open(cached_path, 'r', encoding='utf-8') as f:
-                    html_content = f.read()
-                soup = BeautifulSoup(html_content, 'lxml')
-            else:
-                response = self.session.get(url, timeout=30)
-                response.raise_for_status()
-                soup = BeautifulSoup(response.content, 'lxml')
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'lxml')
             links: List[Dict] = []
             seen = set()
-            all_pdf_links = 0
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href']
-                if '.pdf' not in href.lower():
+                if not href.lower().endswith('.pdf'):
                     continue
-                all_pdf_links += 1
                 abs_url = urljoin(url, href)
-                if '/rundschreiben/' not in abs_url.lower() and '/circulars/' not in abs_url.lower():
+                if '/rundschreiben/' not in abs_url.lower():
                     continue
                 if abs_url in seen:
                     continue
@@ -100,7 +92,7 @@ class FINMACrawler:
                     "title": title or os.path.basename(abs_url),
                     "date_text": date_text,
                 })
-            logger.info(f"FINMA found {all_pdf_links} total PDFs, {len(links)} circular PDF links")
+            logger.info(f"FINMA discovered {len(links)} circular PDF links")
             return links
         except Exception as e:
             logger.error(f"Failed to discover PDF links from {url}: {e}")
@@ -122,7 +114,7 @@ class FINMACrawler:
                 except Exception as e:
                     logger.warning(f"Failed to extract page {page_num} from {pdf_url}: {e}")
                     continue
-            text = "\n\n".join(text_parts)
+            text = "\\n\\n".join(text_parts)
             title = ""
             if reader.metadata:
                 title = reader.metadata.get('/Title', '')
@@ -140,9 +132,9 @@ class FINMACrawler:
         if not text:
             return None
         patterns = [
-            r"(\d{1,2})\.(\d{1,2})\.(\d{4})",
-            r"(\d{4})-(\d{2})-(\d{2})",
-            r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})",
+            r"(\\d{1,2})\\.(\\d{1,2})\\.(\\d{4})",
+            r"(\\d{4})-(\\d{2})-(\\d{2})",
+            r"(\\d{1,2})\\s+([A-Za-z]+)\\s+(\\d{4})",
         ]
         months = {
             m.lower(): i for i, m in enumerate([
@@ -172,11 +164,17 @@ class FINMACrawler:
 
 
 if __name__ == "__main__":
-    # Use cached HTML since FINMA uses AJAX
-    crawler = FINMACrawler(use_cached_html=True)
+    crawler = FINMACrawler()
     circulars = crawler.crawl()
     print(f"Found {len(circulars)} FINMA circulars")
     for c in circulars[:3]:
         print(f"- {c['title'][:70]}")
         print(f"  Date: {c['date']}")
         print(f"  Content: {len(c['content'])} chars")
+'''
+
+# Write the file
+with open(r"C:\Users\clare\OneDrive\Desktop\slenth\crawlers\finma.py", "w", encoding="utf-8") as f:
+    f.write(finma_code)
+
+print("Created finma.py")

@@ -15,9 +15,10 @@ from uuid import uuid4
 
 from config import settings
 
-_provider = getattr(settings, "vector_db_provider", "qdrant").lower()
+_provider = getattr(settings, "vector_db_provider", "pinecone").lower()
 
-if _provider == "qdrant":
+# Optional Qdrant imports guarded by provider (kept for backward compatibility)
+if _provider == "qdrant":  # pragma: no cover
     from qdrant_client import QdrantClient
     from qdrant_client.models import (
         Distance,
@@ -32,10 +33,11 @@ else:
     QdrantClient = None  # type: ignore
     PointStruct = None  # type: ignore
 
+# Pinecone v7+ client
 try:
-    import pinecone  # type: ignore
+    from pinecone import Pinecone  # type: ignore
 except Exception:  # pragma: no cover
-    pinecone = None
+    Pinecone = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ class VectorDBService:
         """Initialize Qdrant client."""
         self.provider = _provider
         self.embedding_dim = settings.embedding_dimension
-        if self.provider == "qdrant":
+        if self.provider == "qdrant":  # pragma: no cover
             self.client = QdrantClient(
                 host=settings.qdrant_host,
                 port=settings.qdrant_port,
@@ -58,9 +60,9 @@ class VectorDBService:
                 f"Initialized VectorDBService (Qdrant) at {settings.qdrant_host}:{settings.qdrant_port}"
             )
         elif self.provider == "pinecone":
-            if pinecone is None:
+            if Pinecone is None:
                 raise RuntimeError("pinecone package not installed but vector_db_provider is 'pinecone'")
-            pinecone.init(api_key=getattr(settings, "pinecone_api_key", None))
+            self.pc = Pinecone(api_key=getattr(settings, "pinecone_api_key", None))
             # Hosts for two logical indexes
             self.external_index_host = getattr(settings, "pinecone_external_index_host", None)
             self.internal_index_host = getattr(settings, "pinecone_internal_index_host", None)
@@ -124,7 +126,7 @@ class VectorDBService:
 
         point_ids = []
 
-        if self.provider == "qdrant":
+        if self.provider == "qdrant":  # pragma: no cover
             points = []
             for text, vector, meta in zip(texts, vectors, metadata):
                 point_id = str(uuid4())
@@ -149,7 +151,7 @@ class VectorDBService:
             host = self.external_index_host if "external" in collection_name else self.internal_index_host
             if not host:
                 raise RuntimeError("Pinecone index host not configured for collection: " + collection_name)
-            index = pinecone.Index(host=host)
+            index = self.pc.Index(host=host)
             items = []
             for text, vector, meta in zip(texts, vectors, metadata):
                 point_id = str(uuid4())
@@ -185,7 +187,7 @@ class VectorDBService:
         Returns:
             List of search results with scores
         """
-        if self.provider == "qdrant":
+        if self.provider == "qdrant":  # pragma: no cover
             try:
                 # Build filter conditions
                 from qdrant_client.models import MatchValue, Range, FieldCondition, Filter  # type: ignore
@@ -262,7 +264,7 @@ class VectorDBService:
             host = self.external_index_host if "external" in collection_name else self.internal_index_host
             if not host:
                 raise RuntimeError("Pinecone index host not configured for collection: " + collection_name)
-            index = pinecone.Index(host=host)
+            index = self.pc.Index(host=host)
             res = index.query(vector=query_vector, top_k=top_k, include_metadata=True)
             formatted = []
             for match in getattr(res, "matches", []):
@@ -298,7 +300,7 @@ class VectorDBService:
         Returns:
             List of matching documents
         """
-        try:
+        try:  # pragma: no cover
             filter_conditions = []
 
             for key, value in filters.items():

@@ -21,7 +21,7 @@ from app.schemas.transaction import (
     TransactionStatusResponse,
 )
 from db.database import get_db
-from db.models import Transaction, ComplianceAnalysis
+from db.models import Transaction, ComplianceAnalysis, AuditLog
 from services.audit import AuditService
 from worker.tasks import process_transaction
 
@@ -53,6 +53,22 @@ async def submit_transaction(
     logger.info(f"Submitting transaction {transaction_id} for processing")
 
     try:
+        # Idempotency: if this transaction_id already exists, return its task info
+        existing = (
+            db.query(Transaction)
+            .filter(Transaction.transaction_id == transaction_id)
+            .first()
+        )
+        if existing:
+            existing_task_id = (existing.raw_data or {}).get("task_id")
+            return TransactionResponse(
+                transaction_id=transaction_id,
+                task_id=existing_task_id or "unknown",
+                status="queued" if existing_task_id else "unknown",
+                message="Transaction already exists",
+                submitted_at=existing.created_at,
+            )
+
         # Map request schema to DB model fields only (avoid invalid kwargs)
         # Derivations:
         # - pep_indicator from customer_is_pep
@@ -92,22 +108,16 @@ async def submit_transaction(
             raw_data=transaction.dict(),
         )
         db.add(db_transaction)
-        db.commit()
+        db.flush()  # get PK without committing
 
         # Enqueue task to Celery
         task = process_transaction.delay(transaction.dict())
 
-        # Persist task_id into raw_data for easier status lookup
-        try:
-            current = db.query(Transaction).filter(Transaction.id == db_transaction.id).first()
-            if current:
-                data = current.raw_data or {}
-                data["task_id"] = task.id
-                current.raw_data = data
-                db.add(current)
-                db.commit()
-        except Exception:
-            db.rollback()
+        # Persist task_id into the same transaction before commit
+        data = db_transaction.raw_data or {}
+        data["task_id"] = task.id
+        db_transaction.raw_data = data
+        db.commit()
 
         # Log audit trail
         audit_service = AuditService(db)
@@ -171,6 +181,30 @@ async def get_transaction_status(
     # This is a simplified version
     # task_id is stored inside Transaction.raw_data
     task_id = (transaction.raw_data or {}).get("task_id")
+
+    if not task_id:
+        # Fallback: retrieve task_id from audit logs if raw_data missing it
+        audit = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.action_type == "SUBMIT_TRANSACTION",
+                AuditLog.target_type == "transaction",
+                AuditLog.target_id == transaction_id,
+            )
+            .order_by(AuditLog.timestamp.desc())
+            .first()
+        )
+        if audit and audit.context_data and audit.context_data.get("task_id"):
+            task_id = audit.context_data.get("task_id")
+            # Backfill into transaction.raw_data for future lookups
+            try:
+                data = transaction.raw_data or {}
+                data["task_id"] = task_id
+                transaction.raw_data = data
+                db.add(transaction)
+                db.commit()
+            except Exception:
+                db.rollback()
 
     if not task_id:
         return TransactionStatusResponse(

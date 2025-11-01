@@ -6,4 +6,5 @@ slenth_env_2/
 .env
 *.log
 __pycache__/
+services/__pycache__/
 *.pyc  
