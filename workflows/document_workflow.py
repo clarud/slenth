@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 def create_document_workflow(
     db_session: Session,
     llm_service: LLMService,
+    skip_background_check: bool = False,
 ):
     """
     Create and compile the Part 2 document corroboration workflow.
@@ -53,6 +54,7 @@ def create_document_workflow(
     Args:
         db_session: Database session
         llm_service: LLM service instance
+        skip_background_check: If True, skip BackgroundCheck agent (no Dilisense API call)
 
     Returns:
         Compiled LangGraph workflow
@@ -78,7 +80,10 @@ def create_document_workflow(
     workflow.add_node("format_validation", format_validation.execute)
     workflow.add_node("nlp_validation", nlp_validation.execute)
     workflow.add_node("image_forensics", image_forensics.execute)
-    workflow.add_node("background_check", background_check.execute)
+    
+    if not skip_background_check:
+        workflow.add_node("background_check", background_check.execute)
+    
     workflow.add_node("cross_reference", cross_reference.execute)
     workflow.add_node("document_risk", document_risk.execute)
     workflow.add_node("report_generator", report_generator.execute)
@@ -92,8 +97,15 @@ def create_document_workflow(
     workflow.add_edge("ocr", "format_validation")
     workflow.add_edge("format_validation", "nlp_validation")
     workflow.add_edge("nlp_validation", "image_forensics")
-    workflow.add_edge("image_forensics", "background_check")
-    workflow.add_edge("background_check", "cross_reference")
+    
+    if skip_background_check:
+        # Skip BackgroundCheck - go directly to CrossReference
+        workflow.add_edge("image_forensics", "cross_reference")
+    else:
+        # Include BackgroundCheck in the flow
+        workflow.add_edge("image_forensics", "background_check")
+        workflow.add_edge("background_check", "cross_reference")
+    
     workflow.add_edge("cross_reference", "document_risk")
     workflow.add_edge("document_risk", "report_generator")
     workflow.add_edge("report_generator", "evidence_storekeeper")
@@ -114,6 +126,7 @@ async def execute_document_workflow(
     file_path: str,
     db_session: Session,
     llm_service: LLMService,
+    skip_background_check: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute the document corroboration workflow for a single document.
@@ -125,14 +138,15 @@ async def execute_document_workflow(
         file_path: Path to uploaded file
         db_session: Database session
         llm_service: LLM service
+        skip_background_check: If True, skip BackgroundCheck agent (no Dilisense API call)
 
     Returns:
         Final workflow state with all results
     """
     start_time = time.time()
 
-    # Create workflow
-    app = create_document_workflow(db_session, llm_service)
+    # Create workflow with optional BackgroundCheck skip
+    app = create_document_workflow(db_session, llm_service, skip_background_check)
 
     # Initialize state
     initial_state: DocumentWorkflowState = {

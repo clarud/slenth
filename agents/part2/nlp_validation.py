@@ -8,12 +8,14 @@ Responsibilities:
 4. Content vs document type validation
 5. Timeline coherence checking
 6. Cross-field consistency validation
+7. Transaction ID extraction
 
 Uses LLM for intelligent semantic analysis beyond rule-based checks.
 """
 
 import logging
 import json
+import re
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -213,6 +215,10 @@ Respond in JSON format with consistency_score, contradictions, and calculation_e
             nlp_valid = False
             consistency_score = 0
 
+        # NOTE: Transaction ID extraction is available via extract_transaction_ids()
+        # but is NOT called automatically. Transaction IDs come from API request,
+        # not from document text extraction.
+
         # Update state
         state["nlp_valid"] = nlp_valid
         state["consistency_score"] = consistency_score
@@ -353,3 +359,107 @@ Respond in JSON format with consistency_score, contradictions, and calculation_e
             "consistency_score": max(0, score),
             "issues": issues
         }
+
+    def extract_transaction_ids(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Extract transaction IDs from document text using pattern matching.
+        
+        Supports various transaction ID formats:
+        - TXN-YYYYMMDD-XXXXXX (e.g., TXN-20241102-123456)
+        - TRANS_ID: XXXXXXXXX
+        - Transaction #: XXXXX
+        - Reference: XXX-YYYY-ZZZ
+        - Txn Ref: XXXXXXXXX
+        - Transaction ID: XXXXXXXXX
+        
+        Args:
+            text: Document text to search
+            
+        Returns:
+            List of found transaction IDs with context
+        """
+        transaction_ids = []
+        
+        # Pattern 1: TXN-YYYYMMDD-XXXXXX format
+        pattern1 = r'TXN-\d{8}-\d{6}'
+        matches1 = re.finditer(pattern1, text, re.IGNORECASE)
+        for match in matches1:
+            transaction_ids.append({
+                "transaction_id": match.group(),
+                "format": "TXN-YYYYMMDD-XXXXXX",
+                "confidence": "high",
+                "position": match.start()
+            })
+        
+        # Pattern 2: Transaction ID: followed by alphanumeric
+        pattern2 = r'(?:transaction\s*id|trans\s*id|txn\s*id)[\s:]+([A-Z0-9\-]{6,20})'
+        matches2 = re.finditer(pattern2, text, re.IGNORECASE)
+        for match in matches2:
+            transaction_ids.append({
+                "transaction_id": match.group(1),
+                "format": "Transaction ID: XXXXX",
+                "confidence": "high",
+                "position": match.start()
+            })
+        
+        # Pattern 3: Transaction # or Txn #
+        pattern3 = r'(?:transaction|txn)\s*#[\s:]*([A-Z0-9\-]{6,20})'
+        matches3 = re.finditer(pattern3, text, re.IGNORECASE)
+        for match in matches3:
+            transaction_ids.append({
+                "transaction_id": match.group(1),
+                "format": "Transaction #XXXXX",
+                "confidence": "medium",
+                "position": match.start()
+            })
+        
+        # Pattern 4: Reference number formats
+        pattern4 = r'(?:reference|ref|ref\.)[\s:]+([A-Z0-9\-]{6,20})'
+        matches4 = re.finditer(pattern4, text, re.IGNORECASE)
+        for match in matches4:
+            transaction_ids.append({
+                "transaction_id": match.group(1),
+                "format": "Reference: XXXXX",
+                "confidence": "medium",
+                "position": match.start()
+            })
+        
+        # Pattern 5: Wire transfer reference formats
+        pattern5 = r'(?:wire|transfer)\s+(?:ref|reference)[\s:]+([A-Z0-9\-]{8,20})'
+        matches5 = re.finditer(pattern5, text, re.IGNORECASE)
+        for match in matches5:
+            transaction_ids.append({
+                "transaction_id": match.group(1),
+                "format": "Wire Reference",
+                "confidence": "high",
+                "position": match.start()
+            })
+        
+        # Pattern 6: SWIFT/IBAN-like formats (if mentioned as transaction ref)
+        pattern6 = r'(?:swift|iban)\s+(?:ref)?[\s:]*([A-Z0-9]{10,34})'
+        matches6 = re.finditer(pattern6, text, re.IGNORECASE)
+        for match in matches6:
+            transaction_ids.append({
+                "transaction_id": match.group(1),
+                "format": "SWIFT/IBAN Reference",
+                "confidence": "medium",
+                "position": match.start()
+            })
+        
+        # Remove duplicates (keep highest confidence)
+        unique_ids = {}
+        for tid in transaction_ids:
+            tid_value = tid["transaction_id"]
+            if tid_value not in unique_ids or tid["confidence"] == "high":
+                unique_ids[tid_value] = tid
+        
+        result = list(unique_ids.values())
+        
+        # Sort by position in document
+        result.sort(key=lambda x: x["position"])
+        
+        self.logger.info(f"Extracted {len(result)} transaction ID(s) from document")
+        for tid in result:
+            self.logger.info(f"  - {tid['transaction_id']} ({tid['format']}, confidence: {tid['confidence']})")
+        
+        return result

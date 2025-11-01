@@ -14,7 +14,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -40,6 +40,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
+    transaction_id: Optional[str] = Form(None),  # NEW: Optional transaction ID from Part 1
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
     """
@@ -50,15 +51,16 @@ async def upload_document(
 
     Args:
         file: Uploaded file
+        transaction_id: Optional transaction ID to link with Part 1 results
         db: Database session
 
     Returns:
-        Complete processing results
+        Complete processing results including combined Part 1+2 assessment if transaction_id provided
     """
     filename = file.filename
     file_size = 0
 
-    logger.info(f"Uploading document: {filename}")
+    logger.info(f"Uploading document: {filename}, transaction_id: {transaction_id or 'None'}")
 
     try:
         # Save uploaded file
@@ -82,6 +84,7 @@ async def upload_document(
             file_size=file_size,
             file_path=file_path,
             status="processing",
+            transaction_id=transaction_id,  # NEW: Link to Part 1 transaction
         )
         db.add(db_document)
         db.commit()
@@ -101,6 +104,7 @@ async def upload_document(
 
         document_data = {
             "document_id": document_id,
+            "transaction_id": transaction_id,  # NEW: Pass transaction_id to workflow
             "filename": filename,
             "file_type": file.content_type,
             "file_size": file_size,
