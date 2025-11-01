@@ -142,24 +142,6 @@ const ReportView = ({
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Progress</p>
-                  <p className="font-medium text-foreground">
-                    {transactionDetail.progress_percentage}%
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Risk Band</p>
-                  <span className={`badge ${getRiskBadgeClass(transactionDetail.risk_band)}`}>
-                    {transactionDetail.risk_band}
-                  </span>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Risk Score</p>
-                  <p className="font-medium text-foreground">
-                    {transactionDetail.risk_score}
-                  </p>
-                </div>
-                <div>
                   <p className="text-sm text-muted-foreground">Created At</p>
                   <p className="font-medium text-foreground text-xs">
                     {new Date(transactionDetail.created_at).toLocaleString()}
@@ -177,23 +159,162 @@ const ReportView = ({
             {/* Compliance Report - Only show if available */}
             {transactionDetail.compliance ? (
               <>
+                {/* Risk Assessment */}
                 <div>
-                  <p className="text-sm font-semibold text-foreground mb-2">
-                    Compliance Summary
-                  </p>
-                  <div className="card p-4" id="report-context">
-                    <p className="text-sm text-foreground whitespace-pre-wrap">
-                      {transactionDetail.compliance.compliance_summary}
-                    </p>
+                  <p className="text-sm font-semibold text-foreground mb-3">Risk Assessment</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Risk Band</p>
+                      <span className={`badge ${getRiskBadgeClass(transactionDetail.compliance.risk_band)}`}>
+                        {transactionDetail.compliance.risk_band}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Risk Score</p>
+                      <p className="font-medium text-foreground">
+                        {transactionDetail.compliance.risk_score.toFixed(2)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Rules Evaluated</p>
+                      <p className="font-medium text-foreground">
+                        {transactionDetail.compliance.rules_evaluated}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Rules Violated</p>
+                      <p className="font-medium text-foreground">
+                        {transactionDetail.compliance.rules_violated}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Processing Time</p>
+                      <p className="font-medium text-foreground">
+                        {transactionDetail.compliance.processing_time_seconds.toFixed(2)}s
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-muted-foreground">Processed At</p>
+                      <p className="font-medium text-foreground text-xs">
+                        {new Date(transactionDetail.compliance.processed_at).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                {transactionDetail.compliance.report_text && (
+                {/* Bayesian Risk Analysis */}
+                {transactionDetail.compliance.bayesian_posterior && (
                   <div>
-                    <p className="text-sm font-semibold text-foreground mb-2">Full Report</p>
-                    <div className="card p-4" id="report-context">
+                    <p className="text-sm font-semibold text-foreground mb-3">Bayesian Risk Analysis</p>
+                    <div className="card p-4">
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">Overall Risk Value:</span>
+                          <span className="font-medium text-foreground">
+                            {(transactionDetail.compliance.bayesian_posterior.risk_value * 100).toFixed(2)}%
+                          </span>
+                        </div>
+                        {transactionDetail.compliance.bayesian_posterior.low > 0 && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-muted-foreground">Low Risk:</span>
+                            <span className="badge badge-success">
+                              {(transactionDetail.compliance.bayesian_posterior.low * 100).toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                        {transactionDetail.compliance.bayesian_posterior.medium > 0 && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-muted-foreground">Medium Risk:</span>
+                            <span className="badge badge-secondary">
+                              {(transactionDetail.compliance.bayesian_posterior.medium * 100).toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                        {transactionDetail.compliance.bayesian_posterior.high > 0 && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-muted-foreground">High Risk:</span>
+                            <span className="badge badge-destructive">
+                              {(transactionDetail.compliance.bayesian_posterior.high * 100).toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                        {transactionDetail.compliance.bayesian_posterior.critical > 0 && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-muted-foreground">Critical Risk:</span>
+                            <span className="badge badge-destructive">
+                              {(transactionDetail.compliance.bayesian_posterior.critical * 100).toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Applicable Rules */}
+                {transactionDetail.compliance.applicable_rules && 
+                 transactionDetail.compliance.applicable_rules.length > 0 && (
+                  <div>
+                    <p className="text-sm font-semibold text-foreground mb-3">
+                      Applicable Rules ({transactionDetail.compliance.applicable_rules.length})
+                    </p>
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                      {transactionDetail.compliance.applicable_rules.map((rule) => (
+                        <div key={rule.rule_id} className="card p-4">
+                          <div className="flex justify-between items-start mb-2">
+                            <h4 className="text-sm font-medium text-foreground">{rule.title}</h4>
+                            <span className={`badge ${getRiskBadgeClass(rule.severity)}`}>
+                              {rule.severity}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">{rule.source}</p>
+                          <p className="text-sm text-foreground mb-2">{rule.description}</p>
+                          <div className="flex gap-2 text-xs">
+                            <span className="badge badge-outline">
+                              {rule.jurisdiction}
+                            </span>
+                            <span className="badge badge-outline">
+                              {rule.rule_type}
+                            </span>
+                            {rule.score > 0 && (
+                              <span className="badge badge-outline">
+                                Score: {rule.score}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Patterns Detected */}
+                {transactionDetail.compliance.patterns_detected && 
+                 transactionDetail.compliance.patterns_detected.length > 0 && (
+                  <div>
+                    <p className="text-sm font-semibold text-foreground mb-3">
+                      Patterns Detected ({transactionDetail.compliance.patterns_detected.length})
+                    </p>
+                    <div className="space-y-2">
+                      {transactionDetail.compliance.patterns_detected.map((pattern, idx) => (
+                        <div key={idx} className="card p-3">
+                          <p className="text-sm text-foreground">{JSON.stringify(pattern)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Compliance Summary - Only show if not empty */}
+                {transactionDetail.compliance.compliance_summary && 
+                 transactionDetail.compliance.compliance_summary.trim() !== "" && (
+                  <div>
+                    <p className="text-sm font-semibold text-foreground mb-2">
+                      Compliance Summary
+                    </p>
+                    <div className="card p-4">
                       <p className="text-sm text-foreground whitespace-pre-wrap">
-                        {transactionDetail.compliance.report_text}
+                        {transactionDetail.compliance.compliance_summary}
                       </p>
                     </div>
                   </div>

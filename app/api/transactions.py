@@ -347,10 +347,25 @@ async def get_compliance_analysis(
     Returns:
         Compliance analysis results
     """
-    # Get compliance analysis from database
+    # Get transaction record first (to join and get transaction_id string)
+    from db.models import Transaction
+    
+    transaction_record = (
+        db.query(Transaction)
+        .filter(Transaction.transaction_id == transaction_id)
+        .first()
+    )
+    
+    if not transaction_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transaction {transaction_id} not found",
+        )
+    
+    # Get compliance analysis from database using the transaction's UUID
     analysis = (
         db.query(ComplianceAnalysis)
-        .filter(ComplianceAnalysis.transaction_id == transaction_id)
+        .filter(ComplianceAnalysis.transaction_id == transaction_record.id)
         .first()
     )
 
@@ -360,22 +375,157 @@ async def get_compliance_analysis(
             detail=f"Compliance analysis not found for transaction {transaction_id}",
         )
 
-    # Format response
+    # Extract data from actual columns (not metadata)
+    applicable_rules = analysis.applicable_rules or []
+    control_test_results = analysis.control_test_results or []
+    pattern_detections = analysis.pattern_detections or {}
+    
+    # Count rules evaluated and violated
+    rules_evaluated = len(applicable_rules)
+    rules_violated = len([r for r in control_test_results if r.get("violated", False)])
+    
+    # Convert bayesian_posterior (stored as float 0-1) back to distribution format for display
+    bayesian_risk_value = analysis.bayesian_posterior or 0.0
+    # Create a distribution representation (all values as floats for schema compliance)
+    bayesian_distribution = {
+        "risk_value": float(bayesian_risk_value),
+        "low": 1.0 - bayesian_risk_value if bayesian_risk_value < 0.1 else 0.0,
+        "medium": bayesian_risk_value if 0.1 <= bayesian_risk_value < 0.4 else 0.0,
+        "high": bayesian_risk_value if 0.4 <= bayesian_risk_value < 0.7 else 0.0,
+        "critical": bayesian_risk_value if bayesian_risk_value >= 0.7 else 0.0,
+    }
+    
+    # Format patterns for display
+    patterns_detected_list = [
+        {"pattern_type": k, "score": v}
+        for k, v in pattern_detections.items()
+    ] if isinstance(pattern_detections, dict) else []
+    
+    # Format response with data from actual database columns
     return ComplianceAnalysisResponse(
         transaction_id=transaction_id,
-        risk_band=analysis.risk_band,
-        risk_score=analysis.risk_score,
-        rules_evaluated=len(analysis.metadata.get("applicable_rules", [])),
-        rules_violated=len(
-            [r for r in analysis.metadata.get("control_results", []) if r.get("violated")]
-        ),
-        applicable_rules=analysis.metadata.get("applicable_rules", []),
-        patterns_detected=analysis.metadata.get("patterns_detected", []),
-        bayesian_posterior=analysis.metadata.get("bayesian_posterior", {}),
-        compliance_summary=analysis.summary,
-        recommendations=analysis.metadata.get("recommendations", []),
-        alerts_generated=analysis.metadata.get("alerts_generated", []),
-        remediation_actions=analysis.metadata.get("remediation_actions", []),
+        risk_band=analysis.risk_band.value if hasattr(analysis.risk_band, 'value') else str(analysis.risk_band),
+        risk_score=analysis.compliance_score,
+        rules_evaluated=rules_evaluated,
+        rules_violated=rules_violated,
+        applicable_rules=applicable_rules,
+        patterns_detected=patterns_detected_list,
+        bayesian_posterior=bayesian_distribution,
+        compliance_summary=analysis.compliance_summary or "",
+        recommendations=[],  # Not stored separately, could extract from summary
+        alerts_generated=[],  # Would need to query Alert table separately
+        remediation_actions=[],  # Would need to query from related tables
         processed_at=analysis.created_at,
-        processing_time_seconds=analysis.metadata.get("processing_time", 0),
+        processing_time_seconds=analysis.processing_time_seconds or 0.0,
     )
+
+
+@router.get("/{transaction_id}/compliance/detailed")
+async def get_detailed_compliance_analysis(
+    transaction_id: str,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Get detailed compliance analysis with all fields including control tests and evidence.
+    
+    This endpoint returns comprehensive compliance data including:
+    - compliance_score and risk_band
+    - applicable_rules (full list)
+    - control_test_results (detailed test outcomes)
+    - pattern_detections (all detected patterns)
+    - bayesian_posterior (risk probability)
+    - evidence_map (evidence mapping results)
+    - compliance_summary (analyst report)
+    - processing_time_seconds
+    
+    Args:
+        transaction_id: Transaction ID
+        db: Database session
+        
+    Returns:
+        Detailed compliance analysis with all available fields
+    """
+    from db.models import Transaction, Alert
+    
+    # Get transaction record
+    transaction_record = (
+        db.query(Transaction)
+        .filter(Transaction.transaction_id == transaction_id)
+        .first()
+    )
+    
+    if not transaction_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transaction {transaction_id} not found",
+        )
+    
+    # Get compliance analysis
+    analysis = (
+        db.query(ComplianceAnalysis)
+        .filter(ComplianceAnalysis.transaction_id == transaction_record.id)
+        .first()
+    )
+
+    if not analysis:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Compliance analysis not found for transaction {transaction_id}",
+        )
+    
+    # Get related alerts
+    alerts = db.query(Alert).filter(
+        Alert.transaction_id == transaction_record.id
+    ).all()
+    
+    alerts_list = [
+        {
+            "alert_id": alert.alert_id,
+            "severity": alert.severity.value if hasattr(alert.severity, 'value') else str(alert.severity),
+            "role": alert.role.value if hasattr(alert.role, 'value') else str(alert.role),
+            "status": alert.status.value if hasattr(alert.status, 'value') else str(alert.status),
+            "title": alert.title,
+            "alert_type": alert.alert_type,
+            "sla_deadline": alert.sla_deadline.isoformat() if alert.sla_deadline else None,
+        }
+        for alert in alerts
+    ]
+    
+    # Return all fields from ComplianceAnalysis
+    return {
+        "transaction_id": transaction_id,
+        
+        # Core risk assessment
+        "compliance_score": analysis.compliance_score,
+        "risk_band": analysis.risk_band.value if hasattr(analysis.risk_band, 'value') else str(analysis.risk_band),
+        
+        # Detailed analysis results (from JSONB columns)
+        "applicable_rules": analysis.applicable_rules or [],
+        "control_test_results": analysis.control_test_results or [],
+        "pattern_detections": analysis.pattern_detections or {},
+        "evidence_map": analysis.evidence_map or {},
+        
+        # Bayesian analysis
+        "bayesian_posterior": analysis.bayesian_posterior or 0.0,
+        "bayesian_interpretation": (
+            "critical" if (analysis.bayesian_posterior or 0.0) >= 0.7 else
+            "high" if (analysis.bayesian_posterior or 0.0) >= 0.4 else
+            "medium" if (analysis.bayesian_posterior or 0.0) >= 0.1 else
+            "low"
+        ),
+        
+        # Summary and notes
+        "compliance_summary": analysis.compliance_summary or "",
+        "analyst_notes": analysis.analyst_notes or "",
+        
+        # Related alerts
+        "alerts": alerts_list,
+        
+        # Metadata
+        "processing_time_seconds": analysis.processing_time_seconds or 0.0,
+        "analyzed_at": analysis.created_at.isoformat() if analysis.created_at else None,
+        
+        # Transaction metadata
+        "transaction_status": transaction_record.status.value if hasattr(transaction_record.status, 'value') else str(transaction_record.status),
+        "transaction_completed_at": transaction_record.processing_completed_at.isoformat() if transaction_record.processing_completed_at else None,
+    }

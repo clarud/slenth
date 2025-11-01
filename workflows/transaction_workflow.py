@@ -255,6 +255,39 @@ async def execute_transaction_workflow(
         final_state["processing_end_time"] = end_time
         processing_duration = (end_time - start_time).total_seconds()
 
+        # POST-WORKFLOW VERIFICATION: Ensure ComplianceAnalysis was created
+        if final_state.get("persistor_completed"):
+            from db.models import ComplianceAnalysis
+            
+            txn_record = db_session.query(TransactionModel).filter(
+                TransactionModel.transaction_id == transaction_id
+            ).first()
+            
+            if txn_record:
+                compliance_check = db_session.query(ComplianceAnalysis).filter(
+                    ComplianceAnalysis.transaction_id == txn_record.id
+                ).first()
+                
+                if not compliance_check:
+                    error_msg = (
+                        f"CRITICAL INTEGRITY ERROR: Workflow completed but no ComplianceAnalysis found "
+                        f"for transaction {transaction_id}. This violates the persistence guarantee."
+                    )
+                    logger.error(error_msg)
+                    
+                    # Mark transaction as FAILED
+                    txn_record.status = TransactionStatus.FAILED
+                    db_session.commit()
+                    
+                    raise RuntimeError(error_msg)
+                else:
+                    logger.info(
+                        f"✅ POST-WORKFLOW VERIFICATION PASSED: ComplianceAnalysis {compliance_check.id} "
+                        f"confirmed for transaction {transaction_id}"
+                    )
+            else:
+                logger.warning(f"Transaction record not found during verification: {transaction_id}")
+
         logger.info(
             f"Transaction workflow completed for {transaction.get('transaction_id')} "
             f"in {processing_duration:.2f}s"

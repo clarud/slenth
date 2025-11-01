@@ -152,8 +152,19 @@ class PersistorAgent(Part1Agent):
             )
             db.add(compliance_analysis)
             db.commit()
+            
+            # VERIFICATION: Confirm ComplianceAnalysis was actually persisted
+            verification = db.query(ComplianceAnalysis).filter(
+                ComplianceAnalysis.transaction_id == transaction.id
+            ).first()
+            
+            if not verification:
+                raise RuntimeError(
+                    f"CRITICAL: ComplianceAnalysis commit succeeded but record not found in database for transaction {transaction_id}"
+                )
+            
             records_created.append(f"compliance_analysis:{compliance_analysis.id}")
-            self.logger.info(f"Created compliance analysis")
+            self.logger.info(f"✅ Created and verified compliance analysis: {compliance_analysis.id}")
 
             # Update transaction status to COMPLETED
             transaction.status = TransactionStatus.COMPLETED
@@ -274,16 +285,63 @@ class PersistorAgent(Part1Agent):
                     }
                 )
 
+            # FINAL VERIFICATION: Ensure ComplianceAnalysis exists before marking as complete
+            final_check = db.query(ComplianceAnalysis).filter(
+                ComplianceAnalysis.transaction_id == transaction.id
+            ).first()
+            
+            if not final_check:
+                raise RuntimeError(
+                    f"CRITICAL: Final verification failed - no ComplianceAnalysis found for transaction {transaction_id}"
+                )
+
             state["persisted"] = True
             state["records_created"] = records_created
             state["persistor_completed"] = True
+            state["compliance_analysis_id"] = str(final_check.id)  # Store for verification
 
-            self.logger.info(f"Persistence complete: {len(records_created)} records created")
+            self.logger.info(
+                f"✅ Persistence complete: {len(records_created)} records created. "
+                f"ComplianceAnalysis ID: {final_check.id}"
+            )
 
         except Exception as e:
-            self.logger.error(f"Error in PersistorAgent: {str(e)}", exc_info=True)
+            self.logger.error(f"❌ CRITICAL: PersistorAgent failed: {str(e)}", exc_info=True)
+            
+            # Rollback any partial database changes
+            if db:
+                try:
+                    db.rollback()
+                    self.logger.info("Database transaction rolled back")
+                except Exception as rollback_error:
+                    self.logger.error(f"Error during rollback: {rollback_error}")
+            
+            # Mark transaction as FAILED
+            try:
+                if db and transaction_id:
+                    from db.models import TransactionStatus
+                    failed_txn = db.query(Transaction).filter(
+                        Transaction.transaction_id == transaction_id
+                    ).first()
+                    if failed_txn:
+                        failed_txn.status = TransactionStatus.FAILED
+                        failed_txn.processing_completed_at = datetime.utcnow()
+                        db.commit()
+                        self.logger.info(f"Marked transaction {transaction_id} as FAILED")
+            except Exception as status_error:
+                self.logger.error(f"Failed to update transaction status: {status_error}")
+                if db:
+                    db.rollback()
+            
             state["persisted"] = False
             state["records_created"] = records_created
             state["errors"] = state.get("errors", []) + [f"PersistorAgent: {str(e)}"]
+            state["persistor_failed"] = True
+            
+            # RE-RAISE EXCEPTION to ensure workflow fails
+            # This guarantees ComplianceAnalysis creation failure = workflow failure
+            raise RuntimeError(
+                f"CRITICAL: Failed to persist compliance analysis for transaction {transaction_id}: {str(e)}"
+            ) from e
 
         return state
