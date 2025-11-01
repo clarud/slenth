@@ -18,7 +18,6 @@ from typing import Any, Dict
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +25,9 @@ logger = logging.getLogger(__name__)
 class ApplicabilityAgent(Part1Agent):
     """Agent: Determine if each retrieved rule applies to transaction"""
 
-    def __init__(self, llm_service: LLMService = None, vector_service: VectorDBService = None):
+    def __init__(self, llm_service: LLMService = None):
         super().__init__("applicability")
         self.llm = llm_service
-        self.vector_db = vector_service
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """

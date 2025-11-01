@@ -1,0 +1,52 @@
+{
+  "transaction": {
+    "transaction_id": "TXN_20251101_204244",
+    "timestamp": "2025-11-01T12:42:44.100437+00:00",
+    "customer_id": "CUST_12345",
+    "customer_name": "John Doe",
+    "customer_risk_rating": "high",
+    "transaction_type": "wire_transfer",
+    "currency": "USD",
+    "amount": 250000,
+    "originator_country": "HK",
+    "beneficiary_country": "SG",
+    "beneficiary_name": "Offshore Trading Co Ltd",
+    "purpose": "Investment"
+  },
+  "transaction_id": "TXN_20251101_204244",
+  "query_strings": [
+    "high risk customer due diligence requirements",
+    "HK originator country AML requirements",
+    "SG beneficiary country sanctions screening",
+    "SWIFT travel rule compliance FATF requirements",
+    "large value transaction reporting requirements"
+  ],
+  "transaction_history": [],
+  "context_summary": "Transaction TXN_20251101_204244 in None jurisdiction. Customer CUST_12345 with high risk rating",
+  "applicable_rules": [],
+  "applicable_rules_filtered": [],
+  "control_results": [],
+  "features": {
+    "amount": 250000.0,
+    "is_high_value": true,
+    "is_round_number": true,
+    "transaction_count_24h": 0,
+    "transaction_count_7d": 0,
+    "total_volume_7d": 0,
+    "avg_amount_7d": 0,
+    "is_cross_border": false,
+    "is_high_risk_country": false,
+    "potential_structuring": false
+  },
+  "risk_score": 0.0,
+  "risk_band": "Low",
+  "compliance_summary": "**Compliance Analysis Report \u2013 TXN_20251101_204244**\n\n**Executive Summary**  \nThe wire transfer identified as TXN_20251101_204244 presents an anomalous profile: both the sender and receiver fields are null, and no controls were tested against this transaction. The risk assessment engine assigned a 0.0/100 score and classified the transaction as \u201cLow\u201d risk. However, the absence of critical data points (sender/receiver identity, origin, destination, and supporting documentation) raises significant",
+  "recommendations": [],
+  "persisted": false,
+  "records_created": [],
+  "processing_start_time": 1762000964.100749,
+  "errors": [
+    "PersistorAgent: No database session available"
+  ],
+  "processing_end_time": 1762000974.872233
+}

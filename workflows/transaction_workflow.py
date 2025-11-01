@@ -45,9 +45,8 @@ from agents.part1 import (
     RemediationOrchestratorAgent,
     RetrievalAgent,
 )
-from services.embeddings import EmbeddingService
 from services.llm import LLMService
-from services.vector_db import VectorDBService
+from services.pinecone_db import PineconeService
 from workflows.state import TransactionWorkflowState
 
 logger = logging.getLogger(__name__)
@@ -56,24 +55,28 @@ logger = logging.getLogger(__name__)
 def create_transaction_workflow(
     db_session: Session,
     llm_service: LLMService,
-    vector_service: VectorDBService,
-    embedding_service: EmbeddingService,
+    pinecone_internal: PineconeService,
+    pinecone_external: PineconeService,
 ):
     """
     Create and compile the Part 1 transaction monitoring workflow.
 
     Args:
         db_session: Database session
-        llm_service: LLM service instance
-        vector_service: Vector DB service instance
-        embedding_service: Embedding service instance
+        llm_service: LLM service instance (Groq)
+        pinecone_internal: Pinecone service for internal rules
+        pinecone_external: Pinecone service for external rules
 
     Returns:
         Compiled LangGraph workflow
     """
     # Initialize agents
     context_builder = ContextBuilderAgent(db_session)
-    retrieval = RetrievalAgent(llm_service, vector_service, embedding_service)
+    retrieval = RetrievalAgent(
+        llm_service=llm_service,
+        pinecone_internal=pinecone_internal,
+        pinecone_external=pinecone_external
+    )
     applicability = ApplicabilityAgent(llm_service)
     evidence_mapper = EvidenceMapperAgent(llm_service)
     control_test = ControlTestAgent(llm_service)
@@ -140,8 +143,8 @@ async def execute_transaction_workflow(
     transaction: Dict[str, Any],
     db_session: Session,
     llm_service: LLMService,
-    vector_service: VectorDBService,
-    embedding_service: EmbeddingService,
+    pinecone_internal: PineconeService,
+    pinecone_external: PineconeService,
 ) -> Dict[str, Any]:
     """
     Execute the transaction monitoring workflow for a single transaction.
@@ -149,9 +152,9 @@ async def execute_transaction_workflow(
     Args:
         transaction: Transaction data
         db_session: Database session
-        llm_service: LLM service
-        vector_service: Vector DB service
-        embedding_service: Embedding service
+        llm_service: LLM service (Groq)
+        pinecone_internal: Pinecone service for internal rules
+        pinecone_external: Pinecone service for external rules
 
     Returns:
         Final workflow state with all results
@@ -160,7 +163,7 @@ async def execute_transaction_workflow(
 
     # Create workflow
     app = create_transaction_workflow(
-        db_session, llm_service, vector_service, embedding_service
+        db_session, llm_service, pinecone_internal, pinecone_external
     )
 
     # Initialize state

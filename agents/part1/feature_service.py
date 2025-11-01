@@ -19,7 +19,6 @@ from typing import Any, Dict
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +26,9 @@ logger = logging.getLogger(__name__)
 class FeatureServiceAgent(Part1Agent):
     """Agent: Generate deterministic features from transaction + history"""
 
-    def __init__(self, llm_service: LLMService = None, vector_service: VectorDBService = None):
+    def __init__(self, llm_service: LLMService = None):
         super().__init__("feature_service")
         self.llm = llm_service
-        self.vector_db = vector_service
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """

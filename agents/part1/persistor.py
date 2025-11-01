@@ -21,7 +21,6 @@ from datetime import datetime
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
 from services.audit import AuditService
 from services.alert_service import AlertService
 
@@ -34,14 +33,12 @@ class PersistorAgent(Part1Agent):
     def __init__(
         self,
         llm_service: LLMService = None,
-        vector_service: VectorDBService = None,
         audit_service: AuditService = None,
         alert_service: AlertService = None,
         db_session = None
     ):
         super().__init__("persistor")
         self.llm = llm_service
-        self.vector_db = vector_service
         self.audit = audit_service
         self.alert_service = alert_service
         self.db = db_session

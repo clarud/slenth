@@ -58,9 +58,20 @@ class Settings(BaseSettings):
     )
     qdrant_timeout: int = Field(default=30, env="QDRANT_TIMEOUT")
     
-    # GROQ
-    groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
+    # LLM Providers
+    llm_provider: str = Field(default="groq", env="LLM_PROVIDER")  # "openai", "anthropic", or "groq"
+    llm_model: str = Field(default="openai/gpt-oss-20b", env="LLM_MODEL")
     
+    # OpenAI
+    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4", env="OPENAI_MODEL")
+    
+    # Groq
+    groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
+    groq_base_url: str = Field(default="https://api.groq.com/openai/v1", env="GROQ_BASE_URL")
+    groq_model: str = Field(default="openai/gpt-oss-20b", env="GROQ_MODEL")
+    
+    # Anthropic
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
     

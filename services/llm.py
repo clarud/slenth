@@ -1,5 +1,5 @@
 """
-LLM Service - Unified interface for OpenAI and Anthropic models.
+LLM Service - Unified interface for LLM providers using LangChain.
 
 Provides methods for:
 - Chat completions
@@ -10,11 +10,12 @@ Provides methods for:
 """
 
 import logging
+import os
 from enum import Enum
 from typing import Any, Dict, Generator, List, Optional
 
 import anthropic
-import openai
+from langchain_openai import ChatOpenAI
 import tiktoken
 from tenacity import (
     retry,
@@ -33,26 +34,43 @@ class LLMProvider(str, Enum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    GROQ = "groq"
 
 
 class LLMService:
-    """Service for interacting with LLM providers."""
+    """Service for interacting with LLM providers using LangChain."""
 
     def __init__(self, provider: Optional[str] = None):
         """
         Initialize LLM service.
 
         Args:
-            provider: LLM provider to use (openai or anthropic). If None, uses config default.
+            provider: LLM provider to use (openai, anthropic, or groq). If None, uses config default.
         """
         self.provider = LLMProvider(provider or settings.llm_provider)
-        self.model = settings.llm_model
-
+        
         if self.provider == LLMProvider.OPENAI:
-            self.client = openai.OpenAI(api_key=settings.openai_api_key)
+            self.client = ChatOpenAI(
+                api_key=settings.openai_api_key,
+                model=settings.openai_model,
+                temperature=0.2
+            )
+            self.model = settings.openai_model
             self.encoding = tiktoken.encoding_for_model(self.model)
+        elif self.provider == LLMProvider.GROQ:
+            # Configure ChatOpenAI to point at Groq
+            self.client = ChatOpenAI(
+                api_key=settings.groq_api_key,
+                base_url="https://api.groq.com/openai/v1",
+                model=settings.groq_model,
+                temperature=0.2
+            )
+            self.model = settings.groq_model
+            self.encoding = None  # Groq uses different tokenization
         elif self.provider == LLMProvider.ANTHROPIC:
+            # Keep Anthropic as direct client for now
             self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            self.model = settings.anthropic_model
             self.encoding = None  # Anthropic uses different tokenization
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
@@ -64,7 +82,7 @@ class LLMService:
 
     @retry(
         retry=retry_if_exception_type(
-            (openai.RateLimitError, openai.APITimeoutError, anthropic.RateLimitError)
+            (Exception,)  # Generic retry for LangChain exceptions
         ),
         wait=wait_exponential(multiplier=1, min=4, max=120),
         stop=stop_after_attempt(5),
@@ -72,12 +90,12 @@ class LLMService:
     def chat_completion(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.0,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         response_format: Optional[Dict[str, str]] = None,
     ) -> str:
         """
-        Generate chat completion.
+        Generate chat completion using LangChain's LCEL pattern.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -89,28 +107,30 @@ class LLMService:
             Generated text response
         """
         try:
-            if self.provider == LLMProvider.OPENAI:
-                kwargs = {
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                }
-                if max_tokens:
-                    kwargs["max_tokens"] = max_tokens
-                if response_format:
-                    kwargs["response_format"] = response_format
-
-                response = self.client.chat.completions.create(**kwargs)
-
-                self.total_input_tokens += response.usage.prompt_tokens
-                self.total_output_tokens += response.usage.completion_tokens
-
-                content = response.choices[0].message.content
-                logger.debug(
-                    f"OpenAI completion: {response.usage.prompt_tokens} in, "
-                    f"{response.usage.completion_tokens} out"
-                )
-                return content
+            if self.provider == LLMProvider.GROQ or self.provider == LLMProvider.OPENAI:
+                # Use LangChain's ChatOpenAI with .invoke() pattern
+                # Convert messages to LangChain format
+                langchain_messages = []
+                for msg in messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    langchain_messages.append({"role": role, "content": content})
+                
+                # Invoke the LLM
+                response = self.client.invoke(langchain_messages)
+                
+                # Track tokens if available
+                if hasattr(response, 'response_metadata'):
+                    usage = response.response_metadata.get('token_usage', {})
+                    self.total_input_tokens += usage.get('prompt_tokens', 0)
+                    self.total_output_tokens += usage.get('completion_tokens', 0)
+                    logger.debug(
+                        f"{self.provider.value} completion: {usage.get('prompt_tokens', 0)} in, "
+                        f"{usage.get('completion_tokens', 0)} out"
+                    )
+                
+                # response.content contains the model's reply
+                return response.content
 
             elif self.provider == LLMProvider.ANTHROPIC:
                 # Convert messages to Anthropic format
@@ -153,11 +173,11 @@ class LLMService:
     def chat_completion_stream(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.0,
+        temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """
-        Generate streaming chat completion.
+        Generate streaming chat completion using LangChain.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -168,21 +188,18 @@ class LLMService:
             Text chunks as they arrive
         """
         try:
-            if self.provider == LLMProvider.OPENAI:
-                kwargs = {
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "stream": True,
-                }
-                if max_tokens:
-                    kwargs["max_tokens"] = max_tokens
-
-                stream = self.client.chat.completions.create(**kwargs)
-
-                for chunk in stream:
-                    if chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
+            if self.provider == LLMProvider.GROQ or self.provider == LLMProvider.OPENAI:
+                # Use LangChain's streaming
+                langchain_messages = []
+                for msg in messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    langchain_messages.append({"role": role, "content": content})
+                
+                # Stream the response
+                for chunk in self.client.stream(langchain_messages):
+                    if chunk.content:
+                        yield chunk.content
 
             elif self.provider == LLMProvider.ANTHROPIC:
                 # Convert messages
@@ -228,7 +245,7 @@ class LLMService:
         if self.provider == LLMProvider.OPENAI and self.encoding:
             return len(self.encoding.encode(text))
         else:
-            # Rough estimate for Anthropic: ~4 chars per token
+            # Rough estimate for Anthropic/Groq: ~4 chars per token
             return len(text) // 4
 
     def count_messages_tokens(self, messages: List[Dict[str, str]]) -> int:
@@ -278,6 +295,13 @@ class LLMService:
                 output_cost = (self.total_output_tokens / 1_000_000) * 1.5
             return input_cost + output_cost
 
+        elif self.provider == LLMProvider.GROQ:
+            # Groq pricing (may vary - update as needed)
+            # Using approximate values
+            input_cost = (self.total_input_tokens / 1_000_000) * 0.1
+            output_cost = (self.total_output_tokens / 1_000_000) * 0.1
+            return input_cost + output_cost
+
         elif self.provider == LLMProvider.ANTHROPIC:
             # Claude 3 Opus pricing
             if "opus" in self.model:
@@ -290,6 +314,45 @@ class LLMService:
             return input_cost + output_cost
 
         return 0.0
+
+    async def generate(
+        self,
+        prompt: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[str] = None,
+    ) -> str:
+        """
+        Simplified interface for generating text from a prompt using LCEL pattern.
+
+        Args:
+            prompt: Input prompt text
+            temperature: Sampling temperature (0.0 to 2.0)
+            max_tokens: Maximum tokens in response
+            response_format: Optional format ("json" or None)
+
+        Returns:
+            Generated text response
+        """
+        if self.provider == LLMProvider.GROQ or self.provider == LLMProvider.OPENAI:
+            # Use LangChain's invoke with simple user message
+            messages = [{"role": "user", "content": prompt}]
+            response = self.client.invoke(messages)
+            return response.content
+        else:
+            # Anthropic fallback
+            messages = [{"role": "user", "content": prompt}]
+            
+            format_dict = None
+            if response_format == "json":
+                format_dict = {"type": "json_object"}
+            
+            return self.chat_completion(
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=format_dict
+            )
 
     def reset_stats(self) -> None:
         """Reset token counters."""

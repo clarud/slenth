@@ -19,8 +19,7 @@ from app.schemas.rule import (
 from db.database import get_db
 from db.models import InternalRule
 from services.audit import AuditService
-from services.embeddings import EmbeddingService
-from services.vector_db import VectorDBService
+from services.pinecone_db import PineconeService
 
 logger = logging.getLogger(__name__)
 
@@ -56,29 +55,33 @@ async def create_internal_rule(
         db.commit()
         db.refresh(db_rule)
 
-        # Embed in vector DB
+        # Embed in Pinecone using integrated embeddings
         try:
-            embedding_service = EmbeddingService()
-            vector_service = VectorDBService()
+            pinecone_service = PineconeService(index_type="internal")
 
-            embedding = embedding_service.embed_text(rule.text)
-            vector_service.upsert_vectors(
-                collection_name="internal_rules",
-                texts=[rule.text],
-                vectors=[embedding],
-                metadata=[
+            # Use Pinecone's upsert_records which generates embeddings automatically
+            pinecone_service.upsert_records(
+                records=[
                     {
-                        "rule_id": db_rule.rule_id,
-                        "title": rule.title,
-                        "section": rule.section,
-                        "effective_date": rule.effective_date,
-                        "version": rule.version,
-                        "is_active": True,
+                        "_id": db_rule.rule_id,
+                        "text": rule.text,
+                        "metadata": {
+                            "rule_id": db_rule.rule_id,
+                            "title": rule.title,
+                            "section": rule.section,
+                            "effective_date": str(rule.effective_date) if rule.effective_date else None,
+                            "version": rule.version,
+                            "is_active": True,
+                            "obligation_type": rule.obligation_type,
+                            "penalty_level": rule.penalty_level,
+                        }
                     }
                 ],
+                namespace="internal-rules"
             )
+            logger.info(f"Embedded rule {db_rule.rule_id} in Pinecone")
         except Exception as e:
-            logger.error(f"Error embedding rule: {e}")
+            logger.error(f"Error embedding rule in Pinecone: {e}")
             # Continue anyway - rule is in DB
 
         # Log audit

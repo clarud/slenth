@@ -10,9 +10,8 @@ from typing import Any, Dict
 from sqlalchemy.orm import Session
 
 from db.database import SessionLocal
-from services.embeddings import EmbeddingService
 from services.llm import LLMService
-from services.vector_db import VectorDBService
+from services.pinecone_db import PineconeService
 from worker.celery_app import celery_app
 from workflows.transaction_workflow import execute_transaction_workflow
 
@@ -50,9 +49,9 @@ def process_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         # Initialize services
-        llm_service = LLMService()
-        vector_service = VectorDBService()
-        embedding_service = EmbeddingService()
+        llm_service = LLMService()  # Uses Groq by default from config
+        pinecone_internal = PineconeService(index_type="internal")
+        pinecone_external = PineconeService(index_type="external")
 
         # Execute workflow
         import asyncio
@@ -61,8 +60,8 @@ def process_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
                 transaction=transaction,
                 db_session=db,
                 llm_service=llm_service,
-                vector_service=vector_service,
-                embedding_service=embedding_service,
+                pinecone_internal=pinecone_internal,
+                pinecone_external=pinecone_external,
             )
         )
 

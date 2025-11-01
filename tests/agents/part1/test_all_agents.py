@@ -17,11 +17,39 @@ Tests all 13 agents in the transaction workflow:
 13. Persistor
 """
 import pytest
+import os
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 from typing import Dict, Any, List
 from datetime import datetime, timezone
 
-# Import agents
+
+# ============================================================================
+# MOCK ENVIRONMENT VARIABLES FOR TESTING
+# ============================================================================
+
+@pytest.fixture(scope="session", autouse=True)
+def mock_env_vars():
+    """Mock required environment variables for tests."""
+    # Set default values for required settings
+    os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing")
+    os.environ.setdefault("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    
+    # Optional: Set other env vars if needed
+    os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test_db")
+    os.environ.setdefault("LLM_PROVIDER", "groq")
+    os.environ.setdefault("GROQ_API_KEY", "test-groq-api-key")
+    os.environ.setdefault("GROQ_MODEL", "openai/gpt-oss-20b")
+    os.environ.setdefault("PINECONE_API_KEY", "test-pinecone-api-key")
+    os.environ.setdefault("PINECONE_INTERNAL_INDEX_HOST", "https://test-internal.pinecone.io")
+    os.environ.setdefault("PINECONE_EXTERNAL_INDEX_HOST", "https://test-external.pinecone.io")
+    
+    yield
+    
+    # Cleanup is optional since these are test values
+
+
+# Import agents (after mock_env_vars is defined)
 from agents.part1.context_builder import ContextBuilderAgent
 from agents.part1.retrieval import RetrievalAgent
 from agents.part1.applicability import ApplicabilityAgent
