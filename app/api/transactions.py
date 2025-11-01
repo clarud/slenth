@@ -53,26 +53,61 @@ async def submit_transaction(
     logger.info(f"Submitting transaction {transaction_id} for processing")
 
     try:
-        # Store transaction in database
+        # Map request schema to DB model fields only (avoid invalid kwargs)
+        # Derivations:
+        # - pep_indicator from customer_is_pep
+        # - sanctions_hit from sanctions_screening string
+        # - customer_segment from customer_type
+        sanctions_str = (transaction.sanctions_screening or "").strip().lower() if hasattr(transaction, "sanctions_screening") else ""
+        sanctions_hit = sanctions_str in {"hit", "positive", "match", "true", "yes"}
+
         db_transaction = Transaction(
             transaction_id=transaction_id,
+            booking_jurisdiction=transaction.booking_jurisdiction,
+            regulator=transaction.regulator,
             booking_datetime=transaction.booking_datetime,
-            customer_id=transaction.customer_id,
+            value_date=transaction.value_date,
             amount=transaction.amount,
             currency=transaction.currency,
-            originator_country=transaction.originator_country,
-            beneficiary_country=transaction.beneficiary_country,
-            product_type=transaction.product_type,
             channel=transaction.channel,
+            product_type=transaction.product_type,
+            originator_name=transaction.originator_name,
+            originator_account=transaction.originator_account,
+            originator_country=transaction.originator_country,
+            beneficiary_name=transaction.beneficiary_name,
+            beneficiary_account=transaction.beneficiary_account,
+            beneficiary_country=transaction.beneficiary_country,
+            swift_mt=transaction.swift_mt,
+            ordering_institution_bic=getattr(transaction, "ordering_institution_bic", None),
+            beneficiary_institution_bic=getattr(transaction, "beneficiary_institution_bic", None),
+            swift_f50_present=getattr(transaction, "swift_f50_present", False),
+            swift_f59_present=getattr(transaction, "swift_f59_present", False),
+            swift_f70_purpose=getattr(transaction, "swift_f70_purpose", None),
+            swift_f71_charges=getattr(transaction, "swift_f71_charges", None),
+            pep_indicator=getattr(transaction, "customer_is_pep", False),
+            sanctions_hit=sanctions_hit,
+            customer_id=transaction.customer_id,
+            customer_segment=getattr(transaction, "customer_type", None),
             customer_risk_rating=transaction.customer_risk_rating,
-            sanctions_screening=transaction.sanctions_screening,
-            raw_json=transaction.dict(),
+            raw_data=transaction.dict(),
         )
         db.add(db_transaction)
         db.commit()
 
         # Enqueue task to Celery
         task = process_transaction.delay(transaction.dict())
+
+        # Persist task_id into raw_data for easier status lookup
+        try:
+            current = db.query(Transaction).filter(Transaction.id == db_transaction.id).first()
+            if current:
+                data = current.raw_data or {}
+                data["task_id"] = task.id
+                current.raw_data = data
+                db.add(current)
+                db.commit()
+        except Exception:
+            db.rollback()
 
         # Log audit trail
         audit_service = AuditService(db)
@@ -134,7 +169,8 @@ async def get_transaction_status(
     # Get task ID from audit log or transaction metadata
     # For simplicity, we'll need to track task_id in transaction record
     # This is a simplified version
-    task_id = transaction.raw_json.get("task_id") if transaction.raw_json else None
+    # task_id is stored inside Transaction.raw_data
+    task_id = (transaction.raw_data or {}).get("task_id")
 
     if not task_id:
         return TransactionStatusResponse(

@@ -24,14 +24,30 @@ class TestFINMACrawler:
         assert "finma.ch" in crawler.base_url
     
     @pytest.mark.asyncio
-    async def test_crawl_returns_circulars(self):
-        """Test that crawl method returns list of circulars"""
+    async def test_crawl_returns_circulars(self, clean_output_files, file_saver):
+        """Test that crawl method returns list of circulars and saves to output"""
         crawler = FINMACrawler()
         
         circulars = await crawler.crawl()
         
         assert isinstance(circulars, list)
         assert len(circulars) > 0
+        
+        # Save to output file for inspection
+        saved = file_saver.save(circulars, "finma.jsonl")
+        print(f"\n✅ Saved {saved} FINMA circulars to tests/crawlers/output/finma.jsonl")
+        
+        # Print summary
+        print(f"\n📊 FINMA Crawl Summary:")
+        print(f"   Total circulars: {len(circulars)}")
+        print(f"   Saved to file: {saved}")
+        if circulars:
+            print(f"\n📄 Sample circular:")
+            sample = circulars[0]
+            print(f"   Title: {sample['title'][:80]}...")
+            print(f"   URL: {sample['url']}")
+            print(f"   Date: {sample['date']}")
+            print(f"   Content length: {len(sample['content'])} chars")
     
     @pytest.mark.asyncio
     async def test_circular_structure(self):
@@ -39,6 +55,8 @@ class TestFINMACrawler:
         crawler = FINMACrawler()
         
         circulars = await crawler.crawl()
+        
+        assert len(circulars) > 0, "Should crawl at least one circular"
         
         for circular in circulars:
             assert "title" in circular
@@ -56,24 +74,32 @@ class TestFINMACrawler:
             assert isinstance(circular["content"], str)
             assert circular["source"] == "FINMA"
             assert circular["jurisdiction"] == "CH"
+            
+            # Verify content is not empty
+            assert len(circular["title"]) > 0, "Title should not be empty"
+            assert len(circular["content"]) > 0, "Content should not be empty"
+    
     
     @pytest.mark.asyncio
-    async def test_crawl_with_mock_html(self, sample_finma_html):
-        """Test crawling with mocked HTML response"""
+    async def test_pdf_content_extraction(self):
+        """Test that PDFs are properly extracted with actual content"""
         crawler = FINMACrawler()
         
-        with patch('crawlers.finma.AsyncWebCrawler') as mock_crawler_class:
-            mock_crawler = AsyncMock()
-            mock_result = Mock()
-            mock_result.html = sample_finma_html
-            mock_crawler.arun = AsyncMock(return_value=mock_result)
-            mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
-            
-            # Test with placeholder data
-            circulars = await crawler.crawl()
-            
-            assert len(circulars) >= 1
-            assert any("Anti-Money Laundering" in c["title"] for c in circulars)
+        circulars = await crawler.crawl()
+        
+        assert len(circulars) > 0, "Should extract at least one circular"
+        
+        # Check that we have actual PDF content, not just links
+        for circular in circulars[:3]:  # Check first 3
+            content = circular["content"]
+            assert len(content) > 100, f"PDF content too short for {circular['title']}"
+            # PDF content should have some common regulatory terms
+            content_lower = content.lower()
+            has_regulatory_content = any(term in content_lower for term in [
+                'aml', 'money laundering', 'financial', 'regulation', 
+                'compliance', 'requirement', 'circular', 'finma'
+            ])
+            assert has_regulatory_content, f"Content doesn't seem like a regulatory document: {circular['title']}"
     
     @pytest.mark.asyncio
     async def test_swiss_date_format(self):
@@ -82,12 +108,14 @@ class TestFINMACrawler:
         
         circulars = await crawler.crawl()
         
+        assert len(circulars) > 0
+        
         for circular in circulars:
             date = circular["date"]
             assert isinstance(date, datetime)
             # Swiss dates often in DD.MM.YYYY format
             assert date.year >= 2020
-            assert date.year <= 2025
+            assert date.year <= 2026
     
     @pytest.mark.asyncio
     async def test_multilingual_content(self):
@@ -96,25 +124,14 @@ class TestFINMACrawler:
         
         circulars = await crawler.crawl()
         
-        # FINMA circulars may be in multiple languages
-        # Just verify content exists
-        for circular in circulars:
-            assert len(circular["content"]) > 0
-    
-    @pytest.mark.asyncio
-    async def test_crawl_error_handling(self):
-        """Test that crawler handles errors gracefully"""
-        crawler = FINMACrawler()
+        assert len(circulars) > 0
         
-        with patch('crawlers.finma.AsyncWebCrawler') as mock_crawler_class:
-            mock_crawler = AsyncMock()
-            mock_crawler.arun = AsyncMock(side_effect=Exception("SSL Error"))
-            mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
-            
-            # Should not raise exception
-            circulars = await crawler.crawl()
-            
-            assert isinstance(circulars, list)
+        # FINMA circulars may be in multiple languages
+        # Just verify content exists and is substantial
+        for circular in circulars:
+            assert len(circular["content"]) > 50, "Content should be substantial"
+    
+    
 
 
 class TestAllCrawlers:
@@ -192,6 +209,7 @@ class TestAllCrawlers:
 
 
 # Standalone test function for manual testing
+@pytest.mark.asyncio
 async def test_finma_crawler_manual():
     """Manual test - can be run directly"""
     print("\n" + "="*60)

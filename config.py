@@ -4,6 +4,7 @@ Loads environment variables and provides typed configuration objects.
 """
 from pydantic_settings import BaseSettings
 from pydantic import Field, PostgresDsn, RedisDsn
+from pathlib import Path
 from typing import List, Optional
 import os
 
@@ -42,6 +43,9 @@ class Settings(BaseSettings):
     celery_result_backend: RedisDsn = Field(..., env="CELERY_RESULT_BACKEND")
     celery_worker_concurrency: int = Field(default=4, env="CELERY_WORKER_CONCURRENCY")
     
+    # Vector DB provider selection
+    vector_db_provider: str = Field(default="qdrant", env="VECTOR_DB_PROVIDER")
+
     # Qdrant
     qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
     qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
@@ -54,16 +58,20 @@ class Settings(BaseSettings):
         default="internal_rules",
         env="QDRANT_COLLECTION_INTERNAL_RULES"
     )
+
+    # Pinecone
+    pinecone_api_key: Optional[str] = Field(default=None, env="PINECONE_API_KEY")
+    pinecone_external_index_host: Optional[str] = Field(default=None, env="PINECONE_EXTERNAL_INDEX_HOST")
+    pinecone_internal_index_host: Optional[str] = Field(default=None, env="PINECONE_INTERNAL_INDEX_HOST")
     
-    # LLM
-    openai_api_key: str = Field(..., env="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4-turbo-preview", env="OPENAI_MODEL")
-    openai_temperature: float = Field(default=0.0, env="OPENAI_TEMPERATURE")
+    # GROQ
+    groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
     
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
     
     # Embeddings
+    embeddings_provider: str = Field(default="openai", env="EMBEDDINGS_PROVIDER")
     embedding_model: str = Field(default="text-embedding-3-large", env="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=3072, env="EMBEDDING_DIMENSION")
     embedding_batch_size: int = Field(default=100, env="EMBEDDING_BATCH_SIZE")
@@ -158,7 +166,8 @@ class Settings(BaseSettings):
     flower_port: int = Field(default=5555, env="FLOWER_PORT")
     
     class Config:
-        env_file = ".env"
+        # Resolve .env relative to this file so it works regardless of CWD
+        env_file = str(Path(__file__).with_name(".env"))
         env_file_encoding = "utf-8"
         case_sensitive = False
 

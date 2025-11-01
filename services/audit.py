@@ -61,14 +61,18 @@ class AuditService:
         Returns:
             Created audit log entry
         """
+        # Map to AuditLog model fields
+        context = dict(details or {})
+        if user_role:
+            context["user_role"] = user_role
+
         audit_log = AuditLog(
-            log_id=str(uuid4()),
             action_type=action_type,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            user_id=user_id,
-            user_role=user_role,
-            details=details or {},
+            action_description=None,
+            actor=user_id or user_role or "system",
+            target_type=entity_type,
+            target_id=entity_id,
+            context_data=context or None,
             ip_address=ip_address,
             user_agent=user_agent,
         )

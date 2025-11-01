@@ -13,6 +13,17 @@ from db.database import init_db
 from app.api import transactions, documents, internal_rules, alerts, cases, health
 
 
+def _mask_url(url: str) -> str:
+    try:
+        if "@" in url and "://" in url:
+            scheme, rest = url.split("://", 1)
+            if "@" in rest:
+                creds, host = rest.split("@", 1)
+                return f"{scheme}://***:***@{host}"
+        return url
+    except Exception:
+        return url
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
@@ -20,6 +31,10 @@ async def lifespan(app: FastAPI):
     logger.info("Starting SLENTH AML Monitoring System...")
     logger.info(f"Environment: {settings.app_env}")
     logger.info(f"Debug mode: {settings.debug}")
+    try:
+        logger.info(f"DB URL: {_mask_url(str(settings.database_url))}")
+    except Exception:
+        pass
     
     # Initialize database
     try:
@@ -108,8 +123,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Include routers
 app.include_router(health.router, prefix="/health", tags=["Health"])
-app.include_router(transactions.router, prefix="/transactions", tags=["Transactions (Part 1)"])
-app.include_router(documents.router, prefix="/documents", tags=["Documents (Part 2)"])
+# transactions and documents routers already define their own prefixes;
+# avoid double-prefixing here.
+app.include_router(transactions.router, tags=["Transactions (Part 1)"])
+app.include_router(documents.router, tags=["Documents (Part 2)"])
 app.include_router(internal_rules.router, prefix="/internal_rules", tags=["Internal Rules"])
 app.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
 app.include_router(cases.router, prefix="/cases", tags=["Cases"])
