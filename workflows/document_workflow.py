@@ -64,10 +64,10 @@ def create_document_workflow(
     nlp_validation = NLPValidationAgent()
     image_forensics = ImageForensicsAgent()
     background_check = BackgroundCheckAgent()
-    cross_reference = CrossReferenceAgent()
+    cross_reference = CrossReferenceAgent(db_session)
     document_risk = DocumentRiskAgent()
     report_generator = ReportGeneratorAgent()
-    evidence_storekeeper = EvidenceStorekeeperAgent()
+    evidence_storekeeper = EvidenceStorekeeperAgent(db_session)
 
     # Define workflow graph
     workflow = StateGraph(DocumentWorkflowState)

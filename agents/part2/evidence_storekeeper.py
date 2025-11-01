@@ -8,7 +8,8 @@ performed here; a placeholder storage_id is returned.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from sqlalchemy.orm import Session
 
 from agents import Part2Agent
 
@@ -18,8 +19,9 @@ logger = logging.getLogger(__name__)
 class EvidenceStorekeeperAgent(Part2Agent):
     """Agent: Manage storage for docs, extracted text, embeddings"""
 
-    def __init__(self) -> None:
+    def __init__(self, db_session: Optional[Session] = None) -> None:
         super().__init__("evidence_storekeeper")
+        self.db_session = db_session
         self.logger.info("Evidence Storekeeper Agent initialized (SKELETON)")
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:

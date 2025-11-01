@@ -12,6 +12,7 @@ Responsibilities:
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from sqlalchemy.orm import Session
 
 from agents import Part2Agent
 
@@ -21,8 +22,9 @@ logger = logging.getLogger(__name__)
 class CrossReferenceAgent(Part2Agent):
     """Agent: Correlate document with transaction history and KYC"""
 
-    def __init__(self, llm_service=None):
+    def __init__(self, db_session: Optional[Session] = None, llm_service=None):
         super().__init__("cross_reference")
+        self.db_session = db_session
         self.llm_service = llm_service
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:

@@ -62,7 +62,7 @@ async def upload_document(
 
     try:
         # Save uploaded file
-        upload_dir = settings.uploaded_docs_path
+        upload_dir = settings.upload_dir
         os.makedirs(upload_dir, exist_ok=True)
 
         document_id = f"DOC-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
@@ -107,7 +107,6 @@ async def upload_document(
         }
 
         # Run workflow - this blocks until complete
-        import asyncio
         final_state = await execute_document_workflow(
             document=document_data,
             file_path=file_path,
