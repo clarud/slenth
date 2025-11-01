@@ -4,27 +4,54 @@ Load mock internal rules from internal_rules/ directory into Pinecone vector dat
 
 This script:
 1. Reads JSON files from internal_rules/ directory
-2. Generates embeddings for each rule
+2. Uses Pinecone's built-in inference API to generate embeddings
 3. Stores vectors with metadata in Pinecone for similarity search
+
+Note: Uses Pinecone's inference API (no OpenAI needed)
+
+Required Environment Variables:
+- PINECONE_API_KEY: Your Pinecone API key
+- PINECONE_INTERNAL_INDEX_HOST: Host URL for internal rules index
 """
 import sys
 import json
+import os
+import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from pinecone import Pinecone
+from dotenv import load_dotenv
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Load environment variables from .env file
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+    logger_init = logging.getLogger(__name__)
+    logger_init.info(f"Loaded environment variables from {env_path}")
 
-from loguru import logger
-
-from config import settings
-from services.embeddings import EmbeddingService
-from services.pinecone_db import PineconeService
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 def load_internal_rules():
     """Load internal rules from JSON files to Pinecone."""
     try:
+        # Get environment variables
+        api_key = os.getenv("PINECONE_API_KEY")
+        index_host = os.getenv("PINECONE_INTERNAL_INDEX_HOST")
+        
+        if not api_key:
+            logger.error("❌ PINECONE_API_KEY environment variable not set")
+            return False
+        
+        if not index_host:
+            logger.error("❌ PINECONE_INTERNAL_INDEX_HOST environment variable not set")
+            return False
+        
         # Get internal_rules directory
         rules_dir = Path(__file__).parent.parent / "internal_rules"
         
@@ -40,18 +67,19 @@ def load_internal_rules():
             logger.warning("⚠️  No JSON files found in internal_rules/")
             return False
         
-        # Initialize services
-        logger.info("🔧 Initializing services...")
-        embedding_service = EmbeddingService()
-        pinecone_service = PineconeService(index_type="internal")
+        # Initialize Pinecone
+        logger.info("🔧 Initializing Pinecone service...")
+        pc = Pinecone(api_key=api_key)
+        index = pc.Index(host=index_host)
         
-        logger.info(f"📦 Using Pinecone internal index: {settings.pinecone_internal_index_host}")
+        logger.info(f"📦 Using Pinecone internal index: {index_host}")
+        logger.info("📝 Using Pinecone's built-in embedding model (no OpenAI required)")
         
+        namespace = "__default__"  # Default namespace (required by Pinecone API 2025-04+)
         loaded_count = 0
         
-        vectors_to_upsert = []
-        metadata_to_upsert = []
-        ids_to_upsert = []
+        # Collect records for batch upsert
+        records_to_upsert = []
         
         for json_file in sorted(json_files):
             logger.info(f"📄 Processing: {json_file.name}")
@@ -84,28 +112,25 @@ def load_internal_rules():
                     # Prepare text for embedding with context
                     text_for_embedding = f"Document {document_id} - {passage_ref}: {passage_text}"
                     
-                    # Generate embedding
-                    embedding = embedding_service.embed_text(text_for_embedding)
-                    
-                    # Prepare metadata for Pinecone
-                    metadata = {
+                    # Create record with text and metadata at top level
+                    # (Pinecone inference API expects flat structure)
+                    record = {
+                        "_id": passage_id,
+                        "text": text_for_embedding,
+                        # Metadata fields at top level
                         "passage_id": passage_id,
-                        "document_id": document_id,
+                        "document_id": int(document_id) if document_id is not None else None,
                         "passage_ref": passage_ref,
-                        "passage_text": passage_text[:1000],  # Truncate for metadata storage
+                        "passage_text": passage_text[:512],  # Truncate for metadata storage
                         "full_text_length": len(passage_text),
                         "source_file": json_file.name,
                         "is_active": True,
                         "jurisdiction": "ADGM",  # Based on the AML Rulebook content
                         "document_type": "aml_rulebook",
-                        "ingestion_date": datetime.utcnow().isoformat(),
+                        "ingestion_date": datetime.now(timezone.utc).isoformat(),
                     }
                     
-                    # Add to batch
-                    vectors_to_upsert.append(embedding)
-                    metadata_to_upsert.append(metadata)
-                    ids_to_upsert.append(passage_id)
-                    
+                    records_to_upsert.append(record)
                     loaded_count += 1
                 
                 logger.info(f"   ✅ Prepared {len([p for p in passages if p.get('Passage', '').strip()])} passages from {json_file.name}")
@@ -114,30 +139,62 @@ def load_internal_rules():
                 logger.error(f"   ❌ Error loading {json_file.name}: {e}")
                 continue
         
-        # Upsert all vectors to Pinecone
-        if vectors_to_upsert:
-            logger.info(f"🚀 Upserting {len(vectors_to_upsert)} vectors to Pinecone...")
-            success = pinecone_service.upsert_vectors(
-                vectors=vectors_to_upsert,
-                metadata_list=metadata_to_upsert,
-                ids=ids_to_upsert
-            )
+        # Upsert all records to Pinecone
+        if records_to_upsert:
+            logger.info(f"🚀 Upserting {len(records_to_upsert)} records to Pinecone...")
+            logger.info("   Pinecone will generate embeddings using its inference API")
             
-            if success:
-                logger.info(f"💾 Successfully upserted {len(vectors_to_upsert)} rules to Pinecone")
-            else:
-                logger.error("❌ Failed to upsert vectors to Pinecone")
+            def _safe_id(rec: dict) -> str:
+                try:
+                    return str(rec.get("_id", rec.get("passage_id", "<no-id>")))
+                except Exception:
+                    return "<invalid-id>"
+
+            # Upsert with batch fallback and per-record retry for problematic items
+            try:
+                batch_size = 96
+                total_batches = (len(records_to_upsert) - 1) // batch_size + 1
+                for i in range(0, len(records_to_upsert), batch_size):
+                    batch = records_to_upsert[i:i + batch_size]
+                    try:
+                        index.upsert_records(namespace=namespace, records=batch)
+                        logger.info(f"   ✅ Upserted batch {i//batch_size + 1}/{total_batches}")
+                    except Exception as be:
+                        # Batch failed — try single-record upserts to isolate/skips bad records
+                        logger.warning(f"   ⚠️ Batch upsert failed (batch {i//batch_size + 1}), attempting per-record upsert: {be}")
+                        for rec in batch:
+                            try:
+                                index.upsert_records(namespace=namespace, records=[rec])
+                                logger.info(f"      ✅ Upserted record {_safe_id(rec)}")
+                            except Exception as sre:
+                                rec_id = _safe_id(rec)
+                                logger.error(f"      ❌ Skipping record {rec_id} due to upsert error: {sre}")
+                                # write failed rec id to a file for inspection
+                                try:
+                                    failed_log = Path(__file__).parent.parent / "failed_upserts.log"
+                                    with open(failed_log, "a", encoding="utf-8") as fh:
+                                        fh.write(f"{datetime.now(timezone.utc).isoformat()} - {rec_id} - {sre}\n")
+                                except Exception as fh_err:
+                                    logger.error(f"         ⚠️ Could not write failed record to log: {fh_err}")
+                logger.info(f"💾 Successfully attempted upsert for {len(records_to_upsert)} rules to Pinecone (some records may have been skipped)")
+            except Exception as e:
+                logger.error(f"❌ Failed to upsert records to Pinecone: {e}")
                 return False
         
         # Get index stats
-        stats = pinecone_service.get_index_stats()
+        try:
+            stats = index.describe_index_stats()
+            total_vectors = stats.get('total_vector_count', 0)
+        except Exception as e:
+            logger.warning(f"⚠️  Could not get index stats: {e}")
+            total_vectors = "N/A"
         
         # Summary
         logger.info("=" * 70)
         logger.info("📊 SUMMARY")
         logger.info("=" * 70)
         logger.info(f"✅ Loaded to Pinecone: {loaded_count} rules")
-        logger.info(f"📦 Total in Pinecone index: {stats.get('total_vectors', 'N/A')} vectors")
+        logger.info(f"📦 Total in Pinecone index: {total_vectors} vectors")
         logger.info("=" * 70)
         logger.info("🎉 Internal rules loading complete!")
         logger.info("   Pinecone: ✅")
