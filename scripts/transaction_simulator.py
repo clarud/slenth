@@ -177,22 +177,48 @@ class TransactionSimulator:
 
 def main():
     """Entry point"""
-    # Path to CSV file
-    csv_path = Path(__file__).parent.parent / "transactions_mock_1000_for_participants.csv"
-    
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Submit transactions from CSV to API")
+    parser.add_argument(
+        "--api",
+        dest="api_base_url",
+        default="http://localhost:8000",
+        help="API base URL (default: http://localhost:8000)",
+    )
+    parser.add_argument(
+        "--csv",
+        dest="csv_path",
+        default=str(Path(__file__).parent.parent / "transactions_mock_1000_for_participants.csv"),
+        help="Path to CSV file",
+    )
+    parser.add_argument(
+        "--batch-size",
+        dest="batch_size",
+        type=int,
+        default=10,
+        help="Number of transactions per batch (default: 10)",
+    )
+    parser.add_argument(
+        "--delay",
+        dest="delay",
+        type=float,
+        default=2.0,
+        help="Delay between batches in seconds (default: 2.0)",
+    )
+
+    args = parser.parse_args()
+
+    csv_path = Path(args.csv_path)
     if not csv_path.exists():
         logger.error(f"CSV file not found: {csv_path}")
         return
-    
-    # Initialize simulator
-    simulator = TransactionSimulator(api_base_url="http://localhost:8000")
-    
-    # Run simulation
-    # Submit 100 transactions in batches of 10, with 2s delay
+
+    simulator = TransactionSimulator(api_base_url=args.api_base_url)
     simulator.simulate(
         csv_path=str(csv_path),
-        batch_size=10,
-        delay=2.0
+        batch_size=args.batch_size,
+        delay=args.delay,
     )
 
 

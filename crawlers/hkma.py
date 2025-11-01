@@ -406,99 +406,185 @@ class HKMACrawler:
     
     def save_to_db(self, circulars: List[Dict], db_session):
         """
-        Save crawled circulars to external_rules table.
+        Save crawled circulars to external_rules table with chunking and Pinecone inference API.
         
         Args:
-            circulars: List of circular dictionaries
+            circulars: List of circular dictionaries with title, date, content, url
             db_session: Database session
         """
         from db.models import ExternalRule
-        from services.embeddings import EmbeddingService
-        from services.vector_db import VectorDBService
+        from config import settings
+        from pinecone.grpc import PineconeGRPC as Pinecone
+        from pinecone import ServerlessSpec
+        import hashlib
         
-        embedding_service = EmbeddingService()
-        vector_db = VectorDBService()
+        # Initialize Pinecone client
+        pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+        index = pc.Index(
+            host=settings.PINECONE_INFERENCE_HOST,
+            name="external"
+        )
         
         saved_count = 0
+        total_chunks = 0
+        batch_records = []
         
-        # Optional file-saving mode for tests: set CRAWLER_SAVE_TO_FILE to a filepath
-        save_path = os.getenv("CRAWLER_SAVE_TO_FILE")
-
         for circular in circulars:
             try:
-                # Generate embedding regardless of mode so tests can verify mocks
-                embedding = embedding_service.embed_text(circular["content"])
-
-                if save_path:
-                    # File-saving mode: append JSON line for inspection
-                    out = Path(save_path)
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    payload = {
-                        **circular,
-                        "metadata": {"crawled_at": datetime.utcnow().isoformat()},
-                    }
-                    out.write_text((out.read_text(encoding="utf-8") if out.exists() else "") +
-                                    (json.dumps(payload, default=str) + "\n"), encoding="utf-8")
-
-                    # Still call vector DB with minimal metadata to satisfy tests when patched
-                    vector_db.upsert_vectors(
-                        collection_name="external_rules",
-                        texts=[circular["content"]],
-                        vectors=[embedding],
-                        metadata=[{
-                            "title": circular["title"],
-                            "source": circular["source"],
-                            "jurisdiction": circular["jurisdiction"],
-                            "rule_type": circular["rule_type"],
-                        }],
-                    )
-
-                    saved_count += 1
-                    logger.info(f"Saved circular to file: {circular['title']}")
-                else:
-                    # Database mode (default)
-                    existing = db_session.query(ExternalRule).filter(
-                        ExternalRule.source == circular["source"],
-                        ExternalRule.title == circular["title"]
-                    ).first()
-
-                    if existing:
-                        logger.info(f"Circular already exists: {circular['title']}")
-                        continue
-
+                # Check for duplicates by source URL
+                existing = db_session.query(ExternalRule).filter(
+                    ExternalRule.source_url == circular["url"]
+                ).first()
+                
+                if existing:
+                    logger.info(f"Circular already exists: {circular['title']}")
+                    continue
+                
+                # Generate rule ID
+                hash_source = f"{circular['title']}-{circular['url']}"
+                rule_hash = hashlib.md5(hash_source.encode()).hexdigest()[:12]
+                base_rule_id = f"HKMA-{rule_hash}"
+                
+                # Chunk the content
+                content = circular.get("content", "")
+                chunks = self._chunk_text(content, max_words=2000, overlap_words=200)
+                
+                logger.info(f"Processing: {circular['title']} ({len(chunks)} chunks)")
+                
+                # Process each chunk
+                for chunk_index, chunk_text in enumerate(chunks):
+                    # Generate unique rule_id and vector_id for this chunk
+                    if len(chunks) > 1:
+                        rule_id = f"{base_rule_id}:{chunk_index}"
+                    else:
+                        rule_id = base_rule_id
+                    
+                    vector_id = str(uuid.uuid4())
+                    
+                    # Create database record
                     rule = ExternalRule(
-                        # NOTE: ExternalRule schema differs; adjust mapping if used.
+                        rule_id=rule_id,
+                        regulator="HKMA",
+                        jurisdiction="HK",
+                        rule_title=circular["title"],
+                        rule_text=chunk_text,
+                        source_url=circular["url"],
+                        document_title=circular["title"],
+                        published_date=circular.get("date"),
+                        vector_id=vector_id,
+                        chunk_index=chunk_index if len(chunks) > 1 else None,
                         meta={
                             "crawled_at": datetime.utcnow().isoformat(),
+                            "rule_type": "circular",
+                            "total_chunks": len(chunks),
+                            "word_count": len(chunk_text.split()),
+                            "full_word_count": len(content.split())
                         }
                     )
+                    
                     db_session.add(rule)
-                    db_session.commit()
-
-                    vector_db.upsert_vectors(
-                        collection_name="external_rules",
-                        texts=[circular["content"]],
-                        vectors=[embedding],
-                        metadata=[{
-                            "rule_id": rule.rule_id,
-                            "title": rule.title,
-                            "description": rule.description,
-                            "source": rule.source,
-                            "jurisdiction": rule.jurisdiction,
-                            "rule_type": rule.rule_type,
-                        }],
-                    )
-
-                    saved_count += 1
-                    logger.info(f"Saved circular: {circular['title']}")
+                    
+                    # Prepare text for embedding with context prefix
+                    embedding_text = self._prepare_text_for_embedding(rule, chunk_index)
+                    
+                    # Add to batch for Pinecone
+                    batch_records.append({
+                        "_id": vector_id,
+                        "text": embedding_text,
+                        "metadata": {
+                            "rule_id": rule_id,
+                            "regulator": "HKMA",
+                            "jurisdiction": "HK",
+                            "title": circular["title"],
+                            "source_url": circular["url"],
+                            "published_date": circular.get("date").isoformat() if circular.get("date") else None,
+                            "chunk_index": chunk_index if len(chunks) > 1 else None,
+                            "total_chunks": len(chunks)
+                        }
+                    })
+                    
+                    total_chunks += 1
+                    
+                    # Batch upsert to Pinecone (96 records at a time)
+                    if len(batch_records) >= 96:
+                        index.upsert_records(
+                            namespace="__default__",
+                            records=batch_records
+                        )
+                        logger.info(f"Upserted batch of {len(batch_records)} records to Pinecone")
+                        batch_records = []
+                
+                # Commit this circular's chunks
+                db_session.commit()
+                saved_count += 1
+                logger.info(f"Saved {len(chunks)} chunk(s) for: {circular['title']}")
                 
             except Exception as e:
                 logger.error(f"Error saving circular {circular.get('title')}: {str(e)}")
-                if not save_path:
-                    db_session.rollback()
+                db_session.rollback()
         
-        logger.info(f"HKMA crawler saved {saved_count}/{len(circulars)} new circulars")
+        # Upsert remaining records
+        if batch_records:
+            index.upsert_records(
+                namespace="__default__",
+                records=batch_records
+            )
+            logger.info(f"Upserted final batch of {len(batch_records)} records to Pinecone")
+        
+        logger.info(f"HKMA crawler: saved {saved_count} circulars ({total_chunks} total chunks)")
         return saved_count
+    
+    def _chunk_text(self, text: str, max_words: int = 2000, overlap_words: int = 200) -> List[str]:
+        """
+        Split text into overlapping chunks based on word count.
+        
+        Args:
+            text: Text to chunk
+            max_words: Maximum words per chunk
+            overlap_words: Number of overlapping words between chunks
+            
+        Returns:
+            List of text chunks
+        """
+        words = text.split()
+        
+        if len(words) <= max_words:
+            return [text]
+        
+        chunks = []
+        start = 0
+        
+        while start < len(words):
+            end = start + max_words
+            chunk_words = words[start:end]
+            chunks.append(" ".join(chunk_words))
+            
+            if end >= len(words):
+                break
+                
+            start = end - overlap_words
+        
+        return chunks
+    
+    def _prepare_text_for_embedding(self, rule: 'ExternalRule', chunk_index: int) -> str:
+        """
+        Prepare text for embedding with context prefix.
+        
+        Args:
+            rule: ExternalRule database model
+            chunk_index: Index of this chunk
+            
+        Returns:
+            Text with context prefix
+        """
+        total_chunks = rule.meta.get("total_chunks", 1)
+        
+        if total_chunks > 1:
+            prefix = f"HKMA HK - {rule.rule_title} [Chunk {chunk_index + 1} of {total_chunks}]: "
+        else:
+            prefix = f"HKMA HK - {rule.rule_title}: "
+        
+        return prefix + rule.rule_text
 
 
 def main():
