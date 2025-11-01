@@ -4,8 +4,9 @@ import { uploadDocument } from "@/api/client";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import Spinner from "@/components/ui/Spinner";
-import { Upload, FileText } from "lucide-react";
+import { Upload, FileText, AlertTriangle } from "lucide-react";
 import type { TransactionDetail, UploadedDocument } from "@/types/api";
+import AlertsModal from "@/components/AlertsModal";
 
 type TabMode = "compliance" | "upload" | "integration";
 
@@ -21,6 +22,7 @@ const ReportView = ({
   const [activeTab, setActiveTab] = useState<TabMode>("compliance");
   const [uploadingForTransaction, setUploadingForTransaction] = useState(false);
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | undefined>();
+  const [showAlertsModal, setShowAlertsModal] = useState(false);
 
   const onDropForTransaction = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -74,7 +76,20 @@ const ReportView = ({
   return (
     <div className="card h-full flex flex-col overflow-hidden">
       <div className="flex-shrink-0 p-4 border-b border-border">
-        <h2 className="text-lg font-semibold text-foreground mb-4">Transaction Report</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-foreground">Transaction Report</h2>
+          
+          {/* Alerts Button - Show when transaction exists */}
+          {transactionDetail && (
+            <button
+              onClick={() => setShowAlertsModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-medium transition-colors shadow-sm"
+            >
+              <AlertTriangle className="w-4 h-4" />
+              View Alerts
+            </button>
+          )}
+        </div>
         
         {/* Tabs - Only show when transaction has compliance report */}
         {transactionDetail?.compliance && (
@@ -166,7 +181,7 @@ const ReportView = ({
                     <div>
                       <p className="text-sm text-muted-foreground">Risk Band</p>
                       <span className={`badge ${getRiskBadgeClass(transactionDetail.compliance.risk_band)}`}>
-                        {transactionDetail.compliance.risk_band}
+                        {transactionDetail.compliance.risk_band?.toUpperCase() || 'N/A'}
                       </span>
                     </div>
                     <div>
@@ -261,11 +276,8 @@ const ReportView = ({
                     <div className="space-y-3 max-h-96 overflow-y-auto">
                       {transactionDetail.compliance.applicable_rules.map((rule) => (
                         <div key={rule.rule_id} className="card p-4">
-                          <div className="flex justify-between items-start mb-2">
+                          <div className="mb-2">
                             <h4 className="text-sm font-medium text-foreground">{rule.title}</h4>
-                            <span className={`badge ${getRiskBadgeClass(rule.severity)}`}>
-                              {rule.severity}
-                            </span>
                           </div>
                           <p className="text-xs text-muted-foreground mb-2">{rule.source}</p>
                           <p className="text-sm text-foreground mb-2">{rule.description}</p>
@@ -461,6 +473,14 @@ const ReportView = ({
           </div>
         )}
       </div>
+      
+      {/* Alerts Modal */}
+      {showAlertsModal && transactionDetail && (
+        <AlertsModal
+          transactionId={transactionDetail.transaction_id}
+          onClose={() => setShowAlertsModal(false)}
+        />
+      )}
     </div>
   );
 };

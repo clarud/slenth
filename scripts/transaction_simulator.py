@@ -249,9 +249,9 @@ def main():
     
     # Load only first 5 transactions
     all_transactions = simulator.load_transactions(str(csv_path))
-    first_5_transactions = all_transactions[:50]
+    first_5_transactions = all_transactions[50:60]
     
-    logger.info(f"Submitting first 50 transactions with 1s intervals...")
+    logger.info(f"Submitting 10 transactions with 5s intervals...")
     
     submitted_count = 0
     failed_count = 0
@@ -270,7 +270,7 @@ def main():
         # Wait 10 seconds before next transaction (except after the last one)
         if i < len(first_5_transactions):
             logger.info(f"⏳ Waiting 10 seconds before next transaction...")
-            time.sleep(1)
+            time.sleep(5)
     
     logger.info("\n" + "="*60)
     logger.info(f"Simulation complete!")

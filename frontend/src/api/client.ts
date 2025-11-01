@@ -9,6 +9,8 @@ import type {
   RulesFilters,
   InternalRulesPayload,
   InternalRulesUploadResponse,
+  AlertListResponse,
+  RemediationResponse,
 } from "@/types/api";
 
 const api = axios.create({
@@ -65,7 +67,6 @@ export const fetchRules = async (
     params.rule_type = filters.rule_type;
   if (filters.regulator) params.regulator = filters.regulator;
   if (filters.jurisdiction) params.jurisdiction = filters.jurisdiction;
-  if (filters.section) params.section = filters.section;
   if (filters.is_active !== undefined) params.is_active = filters.is_active;
   if (filters.page) params.page = filters.page;
   if (filters.page_size) params.page_size = filters.page_size;
@@ -97,4 +98,26 @@ export const createInternalRulesFromText = async (
     console.error("Failed to upload internal rules:", error);
     throw error;
   }
+};
+
+// Alerts
+export const fetchTransactionAlerts = async (
+  transactionId: string
+): Promise<AlertListResponse> => {
+  const { data } = await api.get(`/alerts/transaction/${transactionId}`);
+  return data;
+};
+
+export const triggerRemediationWorkflow = async (
+  alertId: string
+): Promise<RemediationResponse> => {
+  const { data } = await api.post(`/alerts/${alertId}/remediation/trigger`);
+  return data;
+};
+
+export const rejectRemediationWorkflow = async (
+  alertId: string
+): Promise<RemediationResponse> => {
+  const { data } = await api.post(`/alerts/${alertId}/remediation/reject`);
+  return data;
 };

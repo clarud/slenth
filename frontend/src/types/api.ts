@@ -10,6 +10,7 @@ export interface Transaction {
   beneficiary_country: string;
   created_at: string;
   processing_completed_at: string | null;
+  risk_band?: "low" | "medium" | "high" | "critical" | null;
 }
 
 export interface TransactionStatus {
@@ -140,4 +141,39 @@ export interface InternalRulesUploadResponse {
   updated?: number;
   skipped?: number;
   errors?: any;
+}
+
+// Alert Types
+export interface Alert {
+  alert_id: string;
+  title: string;
+  description: string;
+  severity: "low" | "medium" | "high" | "critical";
+  role: "front" | "compliance" | "legal";
+  status: "pending" | "acknowledged" | "in_progress" | "resolved" | "escalated";
+  source_type: "transaction" | "document";
+  source_id: string;
+  remediation_workflow?: string | null;
+  sla_deadline: string;
+  metadata: Record<string, any>;
+  created_at: string;
+  acknowledged_at?: string | null;
+  acknowledged_by?: string | null;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+  sla_breached: boolean;
+}
+
+export interface AlertListResponse {
+  total: number;
+  alerts: Alert[];
+  page: number;
+  page_size: number;
+}
+
+export interface RemediationResponse {
+  success: boolean;
+  message: string;
+  alert_id: string;
+  workflow_status: "triggered" | "rejected";
 }
