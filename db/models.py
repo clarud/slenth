@@ -420,7 +420,7 @@ class ExternalRule(Base):
     
     # Metadata
     chunk_index = Column(Integer)  # If rule is chunked
-    metadata = Column(JSONB)
+    rule_metadata = Column(JSONB)  # Renamed from 'metadata' to avoid SQLAlchemy conflict
     scraped_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
@@ -456,7 +456,7 @@ class InternalRule(Base):
     vector_id = Column(String(100))  # ID in Qdrant
     
     # Metadata
-    metadata = Column(JSONB)
+    rule_metadata = Column(JSONB)  # Renamed from 'metadata' to avoid SQLAlchemy conflict
     created_by = Column(String(100))
     approved_by = Column(String(100))
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
