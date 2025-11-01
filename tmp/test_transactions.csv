@@ -1,0 +1,5 @@
+transaction_type,amount,currency,sender_account,sender_country,receiver_account,receiver_country,purpose,timestamp,jurisdiction
+transfer,100.50,USD,ACC123,US,ACC999,GB,invoice,2024-10-01T12:00:00Z,US
+payment,2500,EUR,ACC124,DE,ACC998,FR,salary,2024-10-02T09:30:00Z,DE
+transfer,75.00,HKD,ACC125,HK,ACC997,HK,gift,2024-10-03T18:45:00Z,HK
+transfer,0,USD,,HK,,US,,,HK

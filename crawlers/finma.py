@@ -169,6 +169,114 @@ class FINMACrawler:
             except Exception:
                 continue
         return None
+    
+    def save_to_db(self, circulars: List[Dict], db_session):
+        """
+        Save crawled circulars to external_rules table.
+        
+        Args:
+            circulars: List of circular dictionaries
+            db_session: Database session
+        """
+        from db.models import ExternalRule
+        from services.embeddings import EmbeddingService
+        from services.vector_db import VectorDBService
+        
+        embedding_service = EmbeddingService()
+        vector_db = VectorDBService()
+        
+        saved_count = 0
+        
+        # Optional file-saving mode for tests
+        save_path = os.getenv("CRAWLER_SAVE_TO_FILE")
+        
+        for circular in circulars:
+            try:
+                # Generate embedding
+                content = circular.get("content", "")
+                if not content:
+                    logger.warning(f"Skipping circular with no content: {circular.get('title')}")
+                    continue
+                    
+                embedding = embedding_service.embed_text(content)
+                
+                if save_path:
+                    # File-saving mode
+                    from pathlib import Path
+                    import json
+                    out = Path(save_path)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    payload = {
+                        **circular,
+                        "metadata": {"crawled_at": datetime.utcnow().isoformat()},
+                    }
+                    out.write_text((out.read_text(encoding="utf-8") if out.exists() else "") +
+                                    (json.dumps(payload, default=str) + "\n"), encoding="utf-8")
+                    
+                    vector_db.upsert_vectors(
+                        collection_name="external_rules",
+                        texts=[content],
+                        vectors=[embedding],
+                        metadata=[{
+                            "title": circular["title"],
+                            "source": circular["source"],
+                            "jurisdiction": circular["jurisdiction"],
+                            "rule_type": circular["rule_type"],
+                        }],
+                    )
+                    
+                    saved_count += 1
+                    logger.info(f"Saved circular to file: {circular['title']}")
+                else:
+                    # Database mode
+                    existing = db_session.query(ExternalRule).filter(
+                        ExternalRule.source == circular["source"],
+                        ExternalRule.title == circular["title"]
+                    ).first()
+                    
+                    if existing:
+                        logger.info(f"Circular already exists: {circular['title']}")
+                        continue
+                    
+                    rule = ExternalRule(
+                        title=circular["title"],
+                        description=content[:500],  # First 500 chars
+                        source=circular["source"],
+                        jurisdiction=circular["jurisdiction"],
+                        rule_type=circular["rule_type"],
+                        meta={
+                            "crawled_at": datetime.utcnow().isoformat(),
+                            "url": circular["url"],
+                            "date": circular["date"].isoformat() if circular.get("date") else None,
+                        }
+                    )
+                    db_session.add(rule)
+                    db_session.commit()
+                    
+                    vector_db.upsert_vectors(
+                        collection_name="external_rules",
+                        texts=[content],
+                        vectors=[embedding],
+                        metadata=[{
+                            "rule_id": rule.rule_id,
+                            "title": rule.title,
+                            "description": rule.description,
+                            "source": rule.source,
+                            "jurisdiction": rule.jurisdiction,
+                            "rule_type": rule.rule_type,
+                        }],
+                    )
+                    
+                    saved_count += 1
+                    logger.info(f"Saved circular: {circular['title']}")
+            
+            except Exception as e:
+                logger.error(f"Error saving circular {circular.get('title')}: {str(e)}")
+                if not save_path:
+                    db_session.rollback()
+        
+        logger.info(f"FINMA crawler saved {saved_count}/{len(circulars)} new circulars")
+        return saved_count
 
 
 if __name__ == "__main__":

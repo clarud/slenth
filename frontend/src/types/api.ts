@@ -1,0 +1,110 @@
+// API Type Definitions
+
+// Transaction Types
+export interface Transaction {
+  transaction_id: string;
+  created_at: string;
+}
+
+export interface TransactionStatus {
+  transaction_id: string;
+  status: string;
+  progress_percentage: number;
+  risk_band: "low" | "medium" | "high" | "critical";
+  risk_score: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ComplianceReport {
+  transaction_id: string;
+  compliance_summary: string;
+  report_text: string;
+  generated_at: string;
+}
+
+export interface TransactionDetail extends TransactionStatus {
+  compliance: ComplianceReport;
+}
+
+// Document Types
+export interface UploadedDocument {
+  document_id: string;
+  filename: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  risk_score: number;
+  processing_completed_at: string;
+  report_text?: string;
+}
+
+// Rule Types
+export type RuleType = "internal" | "external";
+export type Regulator = "HKMA" | "MAS" | "FINMA";
+export type Jurisdiction = "HK" | "SG" | "CH";
+
+export interface RuleItem {
+  rule_id: string;
+  rule_type: RuleType;
+  title: string;
+  description?: string | null;
+  text: string;
+  section?: string | null; // internal only
+  regulator?: Regulator | null; // external only
+  jurisdiction?: Jurisdiction | null;
+  source?: string | null;
+  effective_date?: string | null;
+  version?: string | null;
+  is_active: boolean;
+  created_at: string;
+  metadata?: Record<string, any>;
+}
+
+export interface RulesResponse {
+  total: number;
+  internal_count?: number;
+  external_count?: number;
+  rules: RuleItem[];
+  page: number;
+  page_size: number;
+  filters_applied?: Record<string, any>;
+}
+
+export interface RulesFilters {
+  search?: string;
+  rule_type?: RuleType | "all";
+  regulator?: Regulator;
+  jurisdiction?: Jurisdiction;
+  section?: string;
+  is_active?: boolean;
+  page?: number;
+  page_size?: number;
+}
+
+// Internal Rules Upload Types
+export interface InternalRuleInput {
+  title: string;
+  description?: string;
+  text: string;
+  section?: string;
+  obligation_type?: string;
+  conditions?: string[];
+  expected_evidence?: string[];
+  penalty_level?: string;
+  effective_date?: string;
+  version?: string;
+  source?: string;
+}
+
+export interface InternalRulesPayload {
+  rules: InternalRuleInput[];
+}
+
+export interface InternalRulesUploadResponse {
+  message: string;
+  filename?: string;
+  total_rules?: number;
+  created?: number;
+  updated?: number;
+  skipped?: number;
+  errors?: any;
+}

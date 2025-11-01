@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.schemas.transaction import (
@@ -61,6 +62,21 @@ async def submit_transaction(
         )
         if existing:
             existing_task_id = (existing.raw_data or {}).get("task_id")
+
+            # If the prior record is missing a task_id (from older runs), enqueue now and backfill.
+            if not existing_task_id:
+                try:
+                    encoded_request = jsonable_encoder(transaction)
+                    task = process_transaction.delay(encoded_request)
+                    data = existing.raw_data or {}
+                    data["task_id"] = task.id
+                    existing.raw_data = data
+                    db.add(existing)
+                    db.commit()
+                    existing_task_id = task.id
+                except Exception:
+                    db.rollback()
+
             return TransactionResponse(
                 transaction_id=transaction_id,
                 task_id=existing_task_id or "unknown",
@@ -76,6 +92,9 @@ async def submit_transaction(
         # - customer_segment from customer_type
         sanctions_str = (transaction.sanctions_screening or "").strip().lower() if hasattr(transaction, "sanctions_screening") else ""
         sanctions_hit = sanctions_str in {"hit", "positive", "match", "true", "yes"}
+
+        # Encode request body into JSON-serializable form (convert datetimes, etc.)
+        encoded_request = jsonable_encoder(transaction)
 
         db_transaction = Transaction(
             transaction_id=transaction_id,
@@ -105,13 +124,13 @@ async def submit_transaction(
             customer_id=transaction.customer_id,
             customer_segment=getattr(transaction, "customer_type", None),
             customer_risk_rating=transaction.customer_risk_rating,
-            raw_data=transaction.dict(),
+            raw_data=encoded_request,
         )
         db.add(db_transaction)
         db.flush()  # get PK without committing
 
         # Enqueue task to Celery
-        task = process_transaction.delay(transaction.dict())
+        task = process_transaction.delay(encoded_request)
 
         # Persist task_id into the same transaction before commit
         data = db_transaction.raw_data or {}
