@@ -33,7 +33,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# PyPDF2 import
+# PDF parsing imports
 try:
     from PyPDF2 import PdfReader
 except ImportError:
@@ -41,6 +41,13 @@ except ImportError:
         from pypdf import PdfReader  # Alternative package name
     except ImportError:
         PdfReader = None
+
+# Try PyMuPDF (fitz) as alternative - more robust
+try:
+    import fitz  # PyMuPDF
+    HAS_PYMUPDF = True
+except ImportError:
+    HAS_PYMUPDF = False
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +75,13 @@ class HKMACrawler:
 
         # Get HTML content
         if self.use_cached_html:
-            html_path = Path("hkma.html")
+            html_path = Path("hkma_test.html")  # Updated to use test file
             if not html_path.exists():
                 raise FileNotFoundError(f"Cached HTML file not found: {html_path}")
             html_content = html_path.read_text(encoding="utf-8")
             logger.info("Using cached HTML file")
         else:
-            response = requests.get(self.base_url, headers=self.headers, timeout=30)
+            response = requests.get(self.base_url, headers=self.headers, timeout=30, verify=False)
             response.raise_for_status()
             html_content = response.text
             logger.info("Fetched HTML from live URL")
@@ -83,11 +90,15 @@ class HKMACrawler:
         pdf_links = self._discover_pdf_links(html_content)
         logger.info(f"HKMA discovered {len(pdf_links)} PDF links")
 
-        # Parse each PDF
+        # Parse each PDF (process more, but keep reasonable limit)
         circulars: List[Dict] = []
-        for link in pdf_links[:25]:  # limit for safety
+        max_docs = 50  # Increased from 25 to capture more documents
+        
+        for i, link in enumerate(pdf_links[:max_docs]):
             try:
-                content = self._parse_pdf(link["url"])
+                logger.info(f"Processing {i+1}/{min(len(pdf_links), max_docs)}: {link['title'][:60]}...")
+                
+                content = self._parse_pdf(link["url"], link.get("is_brdr", False))
                 title = link.get("title") or "HKMA Circular"
                 date = self._parse_date(link.get("date_text")) or datetime.utcnow()
 
@@ -112,39 +123,82 @@ class HKMACrawler:
         soup = BeautifulSoup(html_content, 'lxml')
         links: List[Dict] = []
         
-        # Find all rows in the circulars table
+        # Find all PDF links in the page
+        # Pattern 1: Links in table rows with .filter-head .active a
         rows = soup.select("div.template-table tbody tr")
         logger.info(f"Found {len(rows)} table rows")
         
         for row in rows:
-            # Find PDF link in the row - inside .filter-head .active a
-            pdf_link = row.select_one(".filter-head .active a")
-            if not pdf_link:
-                continue
-                
-            href = pdf_link.get("href", "").strip()
-            if not href or ".pdf" not in href.lower():
-                continue
-            
-            # Make absolute URL
-            abs_url = urljoin(self.base_url, href)
-            
-            # Extract title
-            title = pdf_link.get_text(strip=True)
+            # Find PDF link in the row - inside .filter-head .active a OR .filter a
+            pdf_links = row.select(".filter-head .active a, .filter a")
             
             # Extract date from the second column
             date_cell = row.select_one("td[width='140px']")
             date_text = date_cell.get_text(strip=True) if date_cell else ""
             
+            for pdf_link in pdf_links:
+                href = pdf_link.get("href", "").strip()
+                if not href:
+                    continue
+                
+                # Accept both .pdf files and brdr.hkma.gov.hk links (which redirect to PDFs)
+                is_pdf = ".pdf" in href.lower()
+                is_brdr = "brdr.hkma.gov.hk" in href
+                
+                if not (is_pdf or is_brdr):
+                    continue
+                
+                # Make absolute URL
+                abs_url = urljoin(self.base_url, href)
+                
+                # Extract title
+                title = pdf_link.get_text(strip=True)
+                
+                # Skip empty titles
+                if not title or title.strip() == "":
+                    continue
+                
+                links.append({
+                    "url": abs_url,
+                    "title": title,
+                    "date_text": date_text,
+                    "is_brdr": is_brdr,
+                })
+        
+        # Also find standalone PDF links not in rows (annexes, enclosures)
+        all_pdf_links = soup.select("a[href*='.pdf'], a[href*='brdr.hkma.gov.hk']")
+        logger.info(f"Found {len(all_pdf_links)} total PDF/BRDR links in page")
+        
+        # Add links not already captured
+        existing_urls = {link["url"] for link in links}
+        for pdf_link in all_pdf_links:
+            href = pdf_link.get("href", "").strip()
+            if not href:
+                continue
+                
+            abs_url = urljoin(self.base_url, href)
+            
+            # Skip if already added
+            if abs_url in existing_urls:
+                continue
+            
+            title = pdf_link.get_text(strip=True)
+            if not title:
+                continue
+            
+            is_brdr = "brdr.hkma.gov.hk" in href
+            
             links.append({
                 "url": abs_url,
                 "title": title,
-                "date_text": date_text,
+                "date_text": "",
+                "is_brdr": is_brdr,
             })
         
+        logger.info(f"Total unique PDF/BRDR links found: {len(links)}")
         return links
 
-    def _parse_pdf(self, pdf_url: str) -> str:
+    def _parse_pdf(self, pdf_url: str, is_brdr: bool = False) -> str:
         """Fetch PDF using Selenium to handle redirects, then parse with PyPDF2."""
         driver = None
         try:
@@ -163,76 +217,135 @@ class HKMACrawler:
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=chrome_options)
             
-            # Navigate to PDF URL (will redirect to landing page)
-            driver.get(pdf_url)
-            
-            # Wait for page to load
-            time.sleep(3)
-            
-            # Get the final URL after redirects
-            final_url = driver.current_url
-            logger.info(f"Redirected from {pdf_url} to {final_url}")
-            
-            # Parse the landing page to find the actual PDF download link
-            soup = BeautifulSoup(driver.page_source, 'lxml')
-            
-            # Look for PDF download links
-            actual_pdf_url = None
-            
-            # Method 1: Look for links with .pdf extension
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                if '.pdf' in href.lower():
-                    # Make absolute URL
-                    if href.startswith('http'):
-                        actual_pdf_url = href
-                    elif href.startswith('/'):
-                        # Relative to domain
-                        base = final_url.split('/')[0] + '//' + final_url.split('/')[2]
-                        actual_pdf_url = base + href
-                    else:
-                        actual_pdf_url = urljoin(final_url, href)
-                    logger.info(f"Found PDF link: {actual_pdf_url}")
-                    break
-            
-            # Method 2: Try clicking download button if no direct link found
-            if not actual_pdf_url:
-                try:
-                    download_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Download')] | //a[contains(text(), 'Download')]")
-                    onclick = download_btn.get_attribute('onclick')
-                    href = download_btn.get_attribute('href')
-                    if href:
-                        actual_pdf_url = href if href.startswith('http') else urljoin(final_url, href)
-                        logger.info(f"Found PDF from download button href: {actual_pdf_url}")
-                except:
-                    pass
-            
-            # If we found the actual PDF URL, download it
-            if actual_pdf_url:
-                response = requests.get(actual_pdf_url, headers=self.headers, timeout=30, verify=False)
-            else:
-                # Fallback: try the final URL directly
-                logger.warning(f"Could not find PDF link on landing page, trying final URL: {final_url}")
-                response = requests.get(final_url, headers=self.headers, timeout=30, verify=False)
-            
-            response.raise_for_status()
+            # First try direct download to see if it's a real PDF
+            try:
+                logger.info(f"Attempting direct PDF download: {pdf_url[:80]}...")
+                response = requests.get(pdf_url, headers=self.headers, timeout=15, verify=False, allow_redirects=True)
+                
+                # Check if we got an actual PDF
+                if response.status_code == 200 and response.content[:4] == b'%PDF':
+                    logger.info(f"✅ Got direct PDF ({len(response.content)} bytes)")
+                else:
+                    # Not a PDF - it's an HTML landing page, need Selenium
+                    logger.info(f"⚠️ Not a direct PDF (Content-Type: {response.headers.get('Content-Type')}), using Selenium...")
+                    raise Exception("Need Selenium")
+                    
+            except Exception:
+                # BRDR link or landing page - needs Selenium processing
+                # Navigate to URL (may redirect to landing page)
+                driver.get(pdf_url)
+                
+                # Wait for page to load
+                time.sleep(3)
+                
+                # Get the final URL after redirects
+                final_url = driver.current_url
+                logger.info(f"Redirected from {pdf_url} to {final_url}")
+                
+                # Parse the landing page to find the actual PDF download link
+                soup = BeautifulSoup(driver.page_source, 'lxml')
+                
+                # Look for PDF download links
+                actual_pdf_url = None
+                
+                # Method 1: Look for links with .pdf extension
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    if '.pdf' in href.lower():
+                        # Make absolute URL
+                        if href.startswith('http'):
+                            actual_pdf_url = href
+                        elif href.startswith('/'):
+                            # Relative to domain
+                            base = final_url.split('/')[0] + '//' + final_url.split('/')[2]
+                            actual_pdf_url = base + href
+                        else:
+                            actual_pdf_url = urljoin(final_url, href)
+                        logger.info(f"Found PDF link: {actual_pdf_url}")
+                        break
+                
+                # Method 2: Try clicking download button if no direct link found
+                if not actual_pdf_url:
+                    try:
+                        download_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Download')] | //a[contains(text(), 'Download')]")
+                        onclick = download_btn.get_attribute('onclick')
+                        href = download_btn.get_attribute('href')
+                        if href:
+                            actual_pdf_url = href if href.startswith('http') else urljoin(final_url, href)
+                            logger.info(f"Found PDF from download button href: {actual_pdf_url}")
+                    except:
+                        pass
+                
+                # If we found the actual PDF URL, download it
+                if actual_pdf_url:
+                    response = requests.get(actual_pdf_url, headers=self.headers, timeout=30, verify=False)
+                else:
+                    # Fallback: try the final URL directly
+                    logger.warning(f"Could not find PDF link on landing page, trying final URL: {final_url}")
+                    response = requests.get(final_url, headers=self.headers, timeout=30, verify=False)
+                
+                response.raise_for_status()
 
-            # Parse PDF with PyPDF2
-            pdf_file = BytesIO(response.content)
-            reader = PdfReader(pdf_file)
+            # Try PyMuPDF first (more robust), then fall back to PyPDF2
+            pdf_content = response.content
+            text = ""
             
-            # Extract text from ALL pages
-            text_parts = []
-            for page_num, page in enumerate(reader.pages):
+            # Method 1: Try PyMuPDF (fitz) if available
+            if HAS_PYMUPDF:
                 try:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_parts.append(page_text)
+                    doc = fitz.open(stream=pdf_content, filetype="pdf")
+                    text_parts = []
+                    for page_num in range(len(doc)):
+                        try:
+                            page = doc[page_num]
+                            page_text = page.get_text()
+                            if page_text:
+                                text_parts.append(page_text)
+                        except Exception as e:
+                            logger.warning(f"PyMuPDF failed on page {page_num}: {e}")
+                            continue
+                    doc.close()
+                    text = "\n\n".join(text_parts)
+                    if text.strip():
+                        logger.info(f"✅ Extracted {len(text)} chars using PyMuPDF")
+                        return text
                 except Exception as e:
-                    logger.warning(f"Failed to extract page {page_num} from {pdf_url}: {e}")
-                    continue
+                    logger.warning(f"PyMuPDF failed: {e}, falling back to PyPDF2")
             
-            text = "\n\n".join(text_parts)
+            # Method 2: Fall back to PyPDF2
+            if not text.strip() and PdfReader is not None:
+                pdf_file = BytesIO(pdf_content)
+                try:
+                    reader = PdfReader(pdf_file)
+                except Exception as e:
+                    # Try with strict=False for problematic PDFs
+                    logger.warning(f"PyPDF2 standard read failed, trying strict=False: {e}")
+                    pdf_file.seek(0)
+                    try:
+                        reader = PdfReader(pdf_file, strict=False)
+                    except Exception as e2:
+                        logger.error(f"PyPDF2 failed even with strict=False: {e2}")
+                        return ""
+                
+                # Extract text from ALL pages
+                text_parts = []
+                for page_num, page in enumerate(reader.pages):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(page_text)
+                    except Exception as e:
+                        logger.warning(f"Failed to extract page {page_num}: {e}")
+                        continue
+                
+                text = "\n\n".join(text_parts)
+                if text.strip():
+                    logger.info(f"✅ Extracted {len(text)} chars using PyPDF2")
+            
+            # Log if no text was extracted
+            if not text.strip():
+                logger.warning(f"⚠️ No text extracted from PDF: {pdf_url}")
+            
             return text
             
         except Exception as e:

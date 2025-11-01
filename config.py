@@ -31,7 +31,11 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000)
     api_reload: bool = Field(default=True)
     cors_origins: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:8000"]
+        default=[
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "http://localhost:8080",  # Frontend Vite dev server
+        ]
     )
     
     # Database

@@ -8,16 +8,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from services.pinecone_db import PineconeService
-from services.embeddings import EmbeddingService
 
 def main():
     print("Testing Pinecone query (not search)...\n")
     
     service = PineconeService(index_type="internal")
     
-    # Generate embedding for test query
-    embedding_service = EmbeddingService()
-    query_embedding = embedding_service.get_embedding("AML compliance transaction monitoring")
+    # Generate embedding for test query using PineconeService's embed method
+    query_embedding = service.embed_text("AML compliance transaction monitoring")
     
     print(f"Generated embedding of dimension: {len(query_embedding)}\n")
     

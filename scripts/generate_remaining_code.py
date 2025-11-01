@@ -218,7 +218,7 @@ from typing import Any, Dict
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
+from services.pinecone_db import PineconeService
 
 logger = logging.getLogger(__name__)
 
@@ -226,10 +226,10 @@ logger = logging.getLogger(__name__)
 class {config["class"]}(Part1Agent):
     """Agent: {config["description"]}"""
 
-    def __init__(self, llm_service: LLMService = None, vector_service: VectorDBService = None):
+    def __init__(self, llm_service: LLMService = None, pinecone_service: PineconeService = None):
         super().__init__("{name}")
         self.llm = llm_service
-        self.vector_db = vector_service
+        self.pinecone = pinecone_service
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """

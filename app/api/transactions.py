@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.schemas.transaction import (
@@ -28,6 +29,66 @@ from worker.tasks import process_transaction
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+
+
+@router.get("", response_model=list)
+async def list_transactions(
+    skip: int = 0,
+    limit: int = 50,
+    status_filter: str = None,
+    db: Session = Depends(get_db),
+):
+    """
+    List transactions with optional filtering.
+    
+    Args:
+        skip: Number of records to skip (pagination)
+        limit: Maximum number of records to return (max 100)
+        status_filter: Filter by status (pending, processing, completed, failed)
+        db: Database session
+    
+    Returns:
+        List of transactions
+    """
+    from db.models import TransactionStatus
+    
+    # Limit the maximum to prevent overload
+    limit = min(limit, 100)
+    
+    query = db.query(Transaction)
+    
+    # Apply status filter if provided
+    if status_filter:
+        try:
+            status_enum = TransactionStatus[status_filter.upper()]
+            query = query.filter(Transaction.status == status_enum)
+        except KeyError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status filter. Valid values: {[s.value for s in TransactionStatus]}"
+            )
+    
+    # Order by most recent first
+    query = query.order_by(Transaction.created_at.desc())
+    
+    # Apply pagination
+    transactions = query.offset(skip).limit(limit).all()
+    
+    # Convert to response format
+    result = []
+    for txn in transactions:
+        result.append({
+            "transaction_id": txn.transaction_id,
+            "status": txn.status.value if txn.status else "unknown",
+            "amount": float(txn.amount) if txn.amount else 0.0,
+            "currency": txn.currency,
+            "originator_country": txn.originator_country,
+            "beneficiary_country": txn.beneficiary_country,
+            "created_at": txn.created_at.isoformat() if txn.created_at else None,
+            "processing_completed_at": txn.processing_completed_at.isoformat() if txn.processing_completed_at else None,
+        })
+    
+    return result
 
 
 @router.post("", response_model=TransactionResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -61,6 +122,21 @@ async def submit_transaction(
         )
         if existing:
             existing_task_id = (existing.raw_data or {}).get("task_id")
+
+            # If the prior record is missing a task_id (from older runs), enqueue now and backfill.
+            if not existing_task_id:
+                try:
+                    encoded_request = jsonable_encoder(transaction)
+                    task = process_transaction.delay(encoded_request)
+                    data = existing.raw_data or {}
+                    data["task_id"] = task.id
+                    existing.raw_data = data
+                    db.add(existing)
+                    db.commit()
+                    existing_task_id = task.id
+                except Exception:
+                    db.rollback()
+
             return TransactionResponse(
                 transaction_id=transaction_id,
                 task_id=existing_task_id or "unknown",
@@ -76,6 +152,9 @@ async def submit_transaction(
         # - customer_segment from customer_type
         sanctions_str = (transaction.sanctions_screening or "").strip().lower() if hasattr(transaction, "sanctions_screening") else ""
         sanctions_hit = sanctions_str in {"hit", "positive", "match", "true", "yes"}
+
+        # Encode request body into JSON-serializable form (convert datetimes, etc.)
+        encoded_request = jsonable_encoder(transaction)
 
         db_transaction = Transaction(
             transaction_id=transaction_id,
@@ -105,13 +184,13 @@ async def submit_transaction(
             customer_id=transaction.customer_id,
             customer_segment=getattr(transaction, "customer_type", None),
             customer_risk_rating=transaction.customer_risk_rating,
-            raw_data=transaction.dict(),
+            raw_data=encoded_request,
         )
         db.add(db_transaction)
         db.flush()  # get PK without committing
 
         # Enqueue task to Celery
-        task = process_transaction.delay(transaction.dict())
+        task = process_transaction.delay(encoded_request)
 
         # Persist task_id into the same transaction before commit
         data = db_transaction.raw_data or {}

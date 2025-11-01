@@ -2,6 +2,7 @@ internal_rules/*
 
 # Python Environment
 slenth_env_2/
+slenth-frontend/
 .venv
 .env
 *.log
@@ -9,3 +10,4 @@ __pycache__/
 services/__pycache__/
 *.pyc  
 data/workflow_results/*
+tmp/
