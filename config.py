@@ -3,13 +3,21 @@ Configuration management for SLENTH AML Monitoring System.
 Loads environment variables and provides typed configuration objects.
 """
 from pydantic_settings import BaseSettings
-from pydantic import Field, PostgresDsn, RedisDsn
-from typing import List, Optional
+from pydantic_settings import SettingsConfigDict
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from typing import List, Optional, Any
 import os
 
 
 class Settings(BaseSettings):
     """Main application settings."""
+    # pydantic v2 settings config (ignore extra env keys; keep existing .env behavior)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
     
     # Application
     app_env: str = Field(default="development", env="APP_ENV")
@@ -56,12 +64,17 @@ class Settings(BaseSettings):
     )
     
     # LLM
+    llm_provider: str = Field(default="groq", env="LLM_PROVIDER")  # openai, anthropic, or groq
+    
     openai_api_key: str = Field(..., env="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4-turbo-preview", env="OPENAI_MODEL")
     openai_temperature: float = Field(default=0.0, env="OPENAI_TEMPERATURE")
     
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
+    
+    groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", env="GROQ_MODEL")
     
     # Embeddings
     embedding_model: str = Field(default="text-embedding-3-large", env="EMBEDDING_MODEL")
@@ -134,6 +147,28 @@ class Settings(BaseSettings):
     document_max_pages: int = Field(default=100, env="DOCUMENT_MAX_PAGES")
     document_allowed_types: List[str] = Field(default=["pdf"], env="DOCUMENT_ALLOWED_TYPES")  # PDF only for now
     image_max_size_mb: int = Field(default=20, env="IMAGE_MAX_SIZE_MB")
+
+    # Accept CSV or JSON array for list-like envs
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, v: Any):
+        if isinstance(v, str):
+            s = v.strip()
+            # If JSON-looking, let pydantic parse it as complex value
+            if (s.startswith("[") and s.endswith("]")) or (s.startswith("\"") and s.endswith("\"")):
+                return v
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return v
+
+    @field_validator("document_allowed_types", mode="before")
+    @classmethod
+    def _parse_document_allowed_types(cls, v: Any):
+        if isinstance(v, str):
+            s = v.strip()
+            if s.startswith("[") and s.endswith("]"):
+                return v
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return v
     
     # Feature Flags
     enable_background_check: bool = Field(default=True, env="ENABLE_BACKGROUND_CHECK")
@@ -156,11 +191,6 @@ class Settings(BaseSettings):
     enable_tracing: bool = Field(default=False, env="ENABLE_TRACING")
     metrics_port: int = Field(default=9090, env="METRICS_PORT")
     flower_port: int = Field(default=5555, env="FLOWER_PORT")
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
 
 
 # Global settings instance
