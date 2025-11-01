@@ -22,6 +22,10 @@ from datetime import datetime, timezone
 from pinecone import Pinecone
 from dotenv import load_dotenv
 
+# Add project root to path for db imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 # Load environment variables from .env file
 env_path = Path(__file__).parent.parent / ".env"
 if env_path.exists():
@@ -75,7 +79,10 @@ def load_internal_rules():
         logger.info(f"📦 Using Pinecone internal index: {index_host}")
         logger.info("📝 Using Pinecone's built-in embedding model (no OpenAI required)")
         
-        namespace = "__default__"  # Default namespace (required by Pinecone API 2025-04+)
+        # For Pinecone API 2025-04+, don't specify namespace for default namespace
+        # Specifying "__default__" causes data to go to "" but we can't query ""
+        # Not specifying namespace at all ensures data can be queried properly
+        namespace = None  # Don't specify namespace - let Pinecone handle it
         loaded_count = 0
         
         # Collect records for batch upsert
@@ -157,14 +164,22 @@ def load_internal_rules():
                 for i in range(0, len(records_to_upsert), batch_size):
                     batch = records_to_upsert[i:i + batch_size]
                     try:
-                        index.upsert_records(namespace=namespace, records=batch)
+                        # Don't specify namespace to avoid API 2025-04 issues
+                        # Specifying "__default__" causes data to be stored in "" which can't be queried
+                        if namespace:
+                            index.upsert_records(namespace=namespace, records=batch)
+                        else:
+                            index.upsert_records(records=batch)
                         logger.info(f"   ✅ Upserted batch {i//batch_size + 1}/{total_batches}")
                     except Exception as be:
                         # Batch failed — try single-record upserts to isolate/skips bad records
                         logger.warning(f"   ⚠️ Batch upsert failed (batch {i//batch_size + 1}), attempting per-record upsert: {be}")
                         for rec in batch:
                             try:
-                                index.upsert_records(namespace=namespace, records=[rec])
+                                if namespace:
+                                    index.upsert_records(namespace=namespace, records=[rec])
+                                else:
+                                    index.upsert_records(records=[rec])
                                 logger.info(f"      ✅ Upserted record {_safe_id(rec)}")
                             except Exception as sre:
                                 rec_id = _safe_id(rec)
@@ -208,10 +223,203 @@ def load_internal_rules():
         return False
 
 
+def load_internal_rules_to_postgres():
+    """Load internal rules from JSON files to PostgreSQL database."""
+    try:
+        from db.database import SessionLocal
+        from db.models import InternalRule
+        from sqlalchemy.exc import IntegrityError
+        
+        # Get database URL
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            logger.error("❌ DATABASE_URL environment variable not set")
+            return False
+        
+        logger.info(f"✅ Using database: {database_url.split('@')[-1]}")  # Hide credentials
+        
+        # Initialize database session
+        db = SessionLocal()
+        
+        # Get internal_rules directory
+        rules_dir = Path(__file__).parent.parent / "internal_rules"
+        if not rules_dir.exists():
+            logger.error(f"❌ Internal rules directory not found: {rules_dir}")
+            return False
+        
+        # Get all JSON files
+        json_files = sorted(rules_dir.glob("*.json"))
+        if not json_files:
+            logger.error(f"❌ No JSON files found in {rules_dir}")
+            return False
+        
+        logger.info(f"📂 Found {len(json_files)} JSON files")
+        logger.info("=" * 70)
+        
+        # Track statistics
+        total_rules = 0
+        loaded_count = 0
+        updated_count = 0
+        skipped_count = 0
+        
+        # Process each JSON file
+        for json_file in json_files:
+            logger.info(f"📄 Processing: {json_file.name}")
+            
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    rules = json.load(f)
+                
+                if not isinstance(rules, list):
+                    logger.warning(f"⚠️  {json_file.name} does not contain a list, skipping")
+                    continue
+                
+                file_rule_count = 0
+                for rule_data in rules:
+                    total_rules += 1
+                    
+                    # Skip empty passages
+                    passage = rule_data.get("Passage", "").strip()
+                    if not passage:
+                        skipped_count += 1
+                        continue
+                    
+                    rule_id = rule_data.get("ID")
+                    passage_id = rule_data.get("PassageID", "")
+                    document_id = rule_data.get("DocumentID")
+                    
+                    if not rule_id:
+                        logger.warning(f"⚠️  Rule missing ID, skipping")
+                        skipped_count += 1
+                        continue
+                    
+                    # Truncate long fields to fit database constraints
+                    source_str = f"ADGM_AML_Rulebook_Doc_{document_id}"
+                    if len(source_str) > 100:
+                        source_str = source_str[:100]
+                    
+                    policy_ref = passage_id[:100] if len(passage_id) > 100 else passage_id
+                    
+                    # Check if rule already exists
+                    existing_rule = db.query(InternalRule).filter(
+                        InternalRule.rule_id == rule_id
+                    ).first()
+                    
+                    if existing_rule:
+                        # Update existing rule
+                        existing_rule.rule_text = passage
+                        existing_rule.policy_reference = policy_ref
+                        existing_rule.source = source_str
+                        existing_rule.meta = {
+                            "PassageID": passage_id,
+                            "DocumentID": document_id,
+                            "file": json_file.name
+                        }
+                        existing_rule.updated_at = datetime.now(timezone.utc)
+                        updated_count += 1
+                    else:
+                        # Create new rule
+                        new_rule = InternalRule(
+                            rule_id=rule_id,
+                            rule_text=passage,
+                            rule_category="AML",
+                            rule_priority="medium",
+                            version="1.0",
+                            effective_date=datetime.now(timezone.utc),
+                            is_active=True,
+                            source=source_str,
+                            policy_reference=policy_ref,
+                            vector_id=rule_id,  # Same as rule_id for Pinecone reference
+                            meta={
+                                "PassageID": passage_id,
+                                "DocumentID": document_id,
+                                "file": json_file.name
+                            },
+                            created_by="system",
+                            approved_by="system"
+                        )
+                        db.add(new_rule)
+                        loaded_count += 1
+                    
+                    file_rule_count += 1
+                    
+                    # Commit in batches of 100
+                    if file_rule_count % 100 == 0:
+                        try:
+                            db.commit()
+                            logger.info(f"   💾 Committed {file_rule_count} rules from {json_file.name}")
+                        except IntegrityError as e:
+                            logger.error(f"   ❌ Integrity error: {e}")
+                            db.rollback()
+                
+                # Commit remaining rules
+                try:
+                    db.commit()
+                    logger.info(f"   ✅ Processed {file_rule_count} rules from {json_file.name}")
+                except IntegrityError as e:
+                    logger.error(f"   ❌ Integrity error on commit: {e}")
+                    db.rollback()
+                except Exception as e:
+                    logger.error(f"   ❌ Error on commit: {e}")
+                    db.rollback()
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Failed to parse {json_file.name}: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"❌ Error processing {json_file.name}: {e}")
+                logger.exception(e)
+                continue
+        
+        # Close database session
+        db.close()
+        
+        # Summary
+        logger.info("=" * 70)
+        logger.info("📊 SUMMARY")
+        logger.info("=" * 70)
+        logger.info(f"📝 Total rules found: {total_rules}")
+        logger.info(f"✅ New rules created: {loaded_count}")
+        logger.info(f"🔄 Rules updated: {updated_count}")
+        logger.info(f"⏭️  Rules skipped (empty): {skipped_count}")
+        logger.info("=" * 70)
+        logger.info("🎉 Internal rules loading to PostgreSQL complete!")
+        logger.info("=" * 70)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load internal rules to PostgreSQL: {e}")
+        logger.exception(e)
+        return False
+
+
 def main():
     """Main entry point."""
-    logger.info("🚀 Loading internal rules to Pinecone vector database...")
-    success = load_internal_rules()
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Load internal rules to Pinecone and/or PostgreSQL"
+    )
+    parser.add_argument(
+        '--target',
+        choices=['pinecone', 'postgres', 'both'],
+        default='pinecone',
+        help='Target database(s) to load rules into (default: pinecone)'
+    )
+    
+    args = parser.parse_args()
+    
+    success = True
+    
+    if args.target in ['pinecone', 'both']:
+        logger.info("🚀 Loading internal rules to Pinecone vector database...")
+        success = load_internal_rules() and success
+    
+    if args.target in ['postgres', 'both']:
+        logger.info("\n🚀 Loading internal rules to PostgreSQL database...")
+        success = load_internal_rules_to_postgres() and success
+    
     sys.exit(0 if success else 1)
 
 

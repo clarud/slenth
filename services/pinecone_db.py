@@ -202,28 +202,41 @@ class PineconeService:
             List of matching results with metadata and scores
         """
         try:
+            # Build query structure
+            query_structure = {
+                "inputs": {"text": query_text},
+                "top_k": top_k
+            }
+            
+            # Add filters if provided
+            if filters:
+                pinecone_filter = self._build_pinecone_filter(filters)
+                query_structure["filter"] = pinecone_filter
+            
             # Use Pinecone's search with text (inference API generates embedding)
+            # For API 2025-04+: empty string "" is rejected, must use "__default__" for default namespace
+            search_namespace = "__default__" if not namespace or namespace == "" else namespace
+            
             search_results = self.index.search(
-                namespace=namespace,
-                query={
-                    "inputs": {"text": query_text},
-                    "top_k": top_k
-                },
+                namespace=search_namespace,
+                query=query_structure,
                 fields=["*"]  # Return all metadata fields
             )
             
-            # Format results
+            # Format results - Pinecone inference API returns results in "result" -> "hits" structure
             formatted_results = []
-            matches = search_results.get("matches", [])
-            for match in matches:
+            hits = search_results.get("result", {}).get("hits", [])
+            for hit in hits:
+                fields = hit.get('fields', {})
                 result = {
-                    "rule_id": match.get('_id'),
-                    "score": match.get('score', 0),
-                    **match.get('metadata', {})
+                    "rule_id": hit.get('_id'),
+                    "score": hit.get('score', 0),
+                    # Spread all fields from the hit
+                    **fields
                 }
                 formatted_results.append(result)
             
-            logger.info(f"Found {len(formatted_results)} results for text search")
+            logger.info(f"Found {len(formatted_results)} results for text search (namespace: {search_namespace})")
             return formatted_results
             
         except Exception as e:

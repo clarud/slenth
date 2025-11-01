@@ -85,7 +85,42 @@ Respond in JSON format:
                     )
 
                     import json
-                    result = json.loads(response)
+                    import re
+                    
+                    # Validate response is not empty
+                    if not response or not response.strip():
+                        self.logger.warning(f"Empty response from LLM for rule {rule_id}")
+                        result = {
+                            "applies": False,
+                            "rationale": "No LLM response received",
+                            "confidence": 0.0
+                        }
+                    else:
+                        try:
+                            result = json.loads(response)
+                        except json.JSONDecodeError as je:
+                            self.logger.error(f"JSON parse error for rule {rule_id}: {je}")
+                            self.logger.debug(f"Raw response (first 200 chars): {response[:200]}")
+                            
+                            # Try to extract JSON from mixed text response
+                            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                            if json_match:
+                                try:
+                                    result = json.loads(json_match.group())
+                                    self.logger.info(f"Successfully extracted JSON from mixed response")
+                                except:
+                                    # Give up and use default
+                                    result = {
+                                        "applies": False,
+                                        "rationale": f"Parse error: {str(je)[:100]}",
+                                        "confidence": 0.0
+                                    }
+                            else:
+                                result = {
+                                    "applies": False,
+                                    "rationale": f"No valid JSON found in response",
+                                    "confidence": 0.0
+                                }
                     
                     if result.get("applies", False):
                         filtered_rules.append({
@@ -97,7 +132,7 @@ Respond in JSON format:
                         self.logger.info(f"Rule {rule_id} applies (confidence: {result.get('confidence')})")
 
                 except Exception as e:
-                    self.logger.error(f"Error checking applicability for rule {rule_id}: {e}")
+                    self.logger.error(f"Unexpected error checking applicability for rule {rule_id}: {e}")
                     # Include with low confidence if error
                     filtered_rules.append({
                         **rule,

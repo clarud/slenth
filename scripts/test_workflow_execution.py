@@ -166,6 +166,204 @@ def create_sample_transaction(scenario: str = "high_risk") -> dict:
 
 
 # ============================================================================
+# DETAILED AGENT OUTPUT DISPLAY
+# ============================================================================
+
+def display_agent_output(agent_name: str, state: dict):
+    """Display detailed output from each agent."""
+    
+    if agent_name == "context_builder":
+        query_strings = state.get("query_strings", [])
+        if query_strings:
+            print(f"\n   📝 Query Strings Generated ({len(query_strings)}):")
+            for i, query in enumerate(query_strings, 1):
+                print(f"      {i}. \"{query}\"")
+        
+        tx_history = state.get("transaction_history", [])
+        print(f"\n   📊 Historical Transactions: {len(tx_history)}")
+        if tx_history:
+            print(f"      • Most recent: {tx_history[0].get('transaction_id', 'N/A')}")
+            print(f"      • Date range: Last {len(tx_history)} transactions")
+    
+    elif agent_name == "retrieval":
+        retrieved = state.get("applicable_rules", [])  # Fixed: was "retrieved_rules"
+        print(f"\n   📚 Rules Retrieved: {len(retrieved)}")
+        
+        internal = [r for r in retrieved if r.get('source') == 'internal']
+        external = [r for r in retrieved if r.get('source') == 'external']
+        
+        if internal:
+            print(f"\n   🏢 Internal Rules ({len(internal)}):")
+            for i, rule in enumerate(internal[:3], 1):
+                print(f"      {i}. {rule.get('rule_id', 'N/A')}: {rule.get('title', 'N/A')[:60]}")
+        
+        if external:
+            print(f"\n   🌐 External Rules ({len(external)}):")
+            for i, rule in enumerate(external[:3], 1):
+                print(f"      {i}. {rule.get('rule_id', 'N/A')}: {rule.get('title', 'N/A')[:60]}")
+        
+        if not retrieved:
+            print(f"      ⚠️  No rules found (Vector DB may be empty)")
+    
+    elif agent_name == "applicability":
+        # Get both the full list and filtered list
+        all_rules = state.get("applicable_rules", [])
+        filtered_rules = state.get("applicable_rules_filtered", [])
+        
+        print(f"\n   ✓ Applicable Rules: {len(all_rules)}")
+        print(f"   ✓ Filtered (Truly Applicable): {len(filtered_rules)}")
+        
+        if filtered_rules:
+            print(f"\n   📋 Rule Applicability:")
+            for i, rule in enumerate(filtered_rules[:5], 1):
+                rule_title = rule.get('title', 'N/A')[:50]
+                rationale = rule.get('rationale', 'N/A')
+                confidence = rule.get('confidence', 0.0)
+                print(f"      {i}. {rule_title}")
+                print(f"         Rule ID: {rule.get('rule_id', 'N/A')[:36]}")
+                print(f"         Confidence: {confidence:.2f}")
+                print(f"         Reason: {rationale[:100]}")
+    
+    elif agent_name == "evidence_mapper":
+        # evidence_summary is the old name, evidence_map is the correct field
+        evidence = state.get("evidence_map", {}) or state.get("evidence_summary", {})
+        print(f"\n   🗺️  Evidence Mapping: {len(evidence)} rules mapped")
+        
+        if evidence:
+            for rule_id, ev_data in list(evidence.items())[:3]:
+                print(f"\n      Rule: {rule_id}")
+                if isinstance(ev_data, dict):
+                    print(f"      • Evidence Count: {len(ev_data.get('evidence', []))}")
+                else:
+                    print(f"      • Evidence: {str(ev_data)[:100]}")
+    
+    elif agent_name == "control_test":
+        control_results = state.get("control_results", [])
+        print(f"\n   🧪 Control Tests: {len(control_results)}")
+        
+        if control_results:
+            passed = sum(1 for c in control_results if c.get('status') == 'pass')
+            failed = sum(1 for c in control_results if c.get('status') == 'fail')
+            partial = sum(1 for c in control_results if c.get('status') == 'partial')
+            print(f"      • Passed: {passed}")
+            print(f"      • Failed: {failed}")
+            print(f"      • Partial: {partial}")
+            
+            print(f"\n   📋 Control Test Results:")
+            for i, test in enumerate(control_results[:3], 1):
+                rule_title = test.get('rule_title', 'N/A')[:50]
+                status = test.get('status', 'N/A')
+                score = test.get('compliance_score', 0)
+                rationale = test.get('rationale', 'N/A')[:80]
+                
+                status_emoji = "✅" if status == "pass" else "❌" if status == "fail" else "⚠️"
+                print(f"      {i}. {status_emoji} {rule_title}")
+                print(f"         Status: {status.upper()} (Score: {score}/100)")
+                print(f"         Rationale: {rationale}...")
+    
+    elif agent_name == "feature_service":
+        features = state.get("features", {})
+        print(f"\n   🔢 Features Extracted: {len(features)}")
+        
+        if features:
+            print(f"\n   📊 Feature Details:")
+            for key, value in features.items():
+                # Format the key
+                formatted_key = key.replace('_', ' ').title()
+                # Format the value
+                if isinstance(value, bool):
+                    icon = "✓" if value else "✗"
+                    print(f"      {icon} {formatted_key}: {value}")
+                elif isinstance(value, (int, float)):
+                    print(f"      • {formatted_key}: {value:,.2f}" if isinstance(value, float) else f"      • {formatted_key}: {value}")
+                else:
+                    print(f"      • {formatted_key}: {value}")
+    
+    elif agent_name == "bayesian_engine":
+        bayesian = state.get("bayesian_posterior", {})
+        print(f"\n   📊 Bayesian Analysis:")
+        if bayesian:
+            print(f"      • Prior: {bayesian.get('prior_suspicious', 0):.4f}")
+            print(f"      • Posterior: {bayesian.get('posterior_suspicious', 0):.4f}")
+            print(f"      • Evidence Strength: {bayesian.get('evidence_strength', 'N/A')}")
+    
+    elif agent_name == "pattern_detector":
+        patterns = state.get("detected_patterns", [])
+        print(f"\n   🎯 Patterns Detected: {len(patterns)}")
+        
+        if patterns:
+            print(f"\n   📋 Pattern Details:")
+            for i, pattern in enumerate(patterns, 1):
+                print(f"      {i}. {pattern.get('pattern_type', 'N/A')}")
+                print(f"         Confidence: {pattern.get('confidence', 0):.2%}")
+                print(f"         Description: {pattern.get('description', 'N/A')[:60]}")
+    
+    elif agent_name == "decision_fusion":
+        print(f"\n   ⚖️  Risk Assessment:")
+        print(f"      • Risk Score: {state.get('risk_score', 0):.2f}")
+        print(f"      • Risk Band: {state.get('risk_band', 'N/A')}")
+        
+        breakdown = state.get("score_breakdown", {})
+        if breakdown:
+            print(f"\n   📊 Score Breakdown:")
+            print(f"      • Rule Score: {breakdown.get('rule_score', 0):.2f}")
+            print(f"      • ML Score: {breakdown.get('ml_score', 0):.2f}")
+            print(f"      • Pattern Score: {breakdown.get('pattern_score', 0):.2f}")
+    
+    elif agent_name == "analyst_writer":
+        # Try multiple possible field names
+        report = state.get("analyst_report", "") or state.get("compliance_summary", "")
+        recommendations = state.get("recommendations", [])
+        
+        print(f"\n   📝 Analyst Report:")
+        print(f"      • Length: {len(report)} characters")
+        print(f"      • Recommendations: {len(recommendations)}")
+        
+        if report and len(report) > 0:
+            # Show first few lines
+            lines = report.split('\n')[:5]
+            print(f"\n      Preview:")
+            for line in lines:
+                if line.strip():
+                    print(f"      {line[:80]}")
+        
+        if recommendations:
+            print(f"\n      Recommendations:")
+            for i, rec in enumerate(recommendations[:3], 1):
+                print(f"      {i}. {rec[:80]}")
+    
+    elif agent_name == "alert_composer":
+        alerts = state.get("alerts", [])
+        print(f"\n   🚨 Alerts: {len(alerts)}")
+        
+        if alerts:
+            print(f"\n   📋 Alert Details:")
+            for i, alert in enumerate(alerts, 1):
+                print(f"      {i}. [{alert.get('severity', 'N/A')}] {alert.get('title', 'N/A')}")
+                print(f"         Role: {alert.get('role', 'N/A')}")
+    
+    elif agent_name == "remediation":
+        actions = state.get("remediation_actions", [])
+        print(f"\n   🔧 Remediation Actions: {len(actions)}")
+        
+        if actions:
+            print(f"\n   📋 Action Details:")
+            for i, action in enumerate(actions, 1):
+                print(f"      {i}. {action.get('action_type', 'N/A')}")
+                print(f"         Owner: {action.get('owner', 'N/A')}")
+                print(f"         SLA: {action.get('sla_hours', 'N/A')} hours")
+    
+    elif agent_name == "persistor":
+        records = state.get("records_created", [])
+        print(f"\n   💾 Records Persisted: {len(records)}")
+        
+        if records:
+            print(f"\n   📋 Created Records:")
+            for record in records:
+                print(f"      • {record}")
+
+
+# ============================================================================
 # WORKFLOW EXECUTION
 # ============================================================================
 
@@ -177,61 +375,187 @@ async def run_workflow_with_logging(
     pinecone_external: PineconeService,
 ) -> dict:
     """
-    Execute workflow and log each step.
+    Execute workflow with comprehensive agent-by-agent logging.
+    
+    This function uses execute_transaction_workflow() which handles transaction
+    persistence, but captures streaming output for detailed logging.
     
     Returns:
         Final workflow state
     """
     logger = logging.getLogger(__name__)
     
-    logger.info("="*80)
-    logger.info("STARTING TRANSACTION WORKFLOW EXECUTION")
-    logger.info("="*80)
-    logger.info(f"Transaction ID: {transaction['transaction_id']}")
-    logger.info(f"Amount: {transaction['currency']} {transaction['amount']:,.2f}")
-    logger.info(f"Route: {transaction['originator_country']} → {transaction['beneficiary_country']}")
-    logger.info(f"Customer Risk: {transaction['customer_risk_rating']}")
-    logger.info("="*80)
+    print("\n" + "=" * 80)
+    print("🚀  TRANSACTION WORKFLOW EXECUTION")
+    print("=" * 80)
+    print(f"📍 Transaction ID: {transaction['transaction_id']}")
+    print(f"💰 Amount: {transaction['currency']} {transaction['amount']:,.2f}")
+    print(f"🌍 Route: {transaction.get('originator_country', 'N/A')} → {transaction.get('beneficiary_country', 'N/A')}")
+    print(f"⚠️  Customer Risk: {transaction['customer_risk_rating']}")
+    print(f"👤 Customer ID: {transaction['customer_id']}")
+    print("=" * 80)
+    
+    # Import the workflow execution function
+    # This handles transaction persistence properly
+    from workflows.transaction_workflow import execute_transaction_workflow
+    
+    # For comprehensive logging, we need to intercept the workflow execution
+    # We'll use a custom approach: persist transaction, then stream the workflow
+    from datetime import datetime, timezone
+    from db.models import Transaction as TransactionModel, TransactionStatus
+    import time
+    
+    start_time = time.time()
+    transaction_id = transaction.get("transaction_id")
+    
+    # 1. Persist transaction (same logic as execute_transaction_workflow)
+    try:
+        existing = db_session.query(TransactionModel).filter(
+            TransactionModel.transaction_id == transaction_id
+        ).first()
+        
+        if existing:
+            existing.status = TransactionStatus.PROCESSING
+            existing.processing_started_at = datetime.now(timezone.utc)
+            existing.amount = transaction.get("amount", existing.amount)
+            existing.currency = transaction.get("currency", existing.currency)
+            existing.customer_risk_rating = transaction.get("customer_risk_rating", existing.customer_risk_rating)
+            existing.raw_data = transaction
+            db_session.commit()
+            logger.info(f"✅ Updated existing transaction {transaction_id} to PROCESSING")
+        else:
+            db_transaction = TransactionModel(
+                transaction_id=transaction_id,
+                booking_jurisdiction=transaction.get("booking_jurisdiction", "HK"),
+                regulator=transaction.get("regulator", "HKMA"),
+                booking_datetime=datetime.now(timezone.utc),
+                value_date=transaction.get("value_date"),
+                amount=transaction.get("amount"),
+                currency=transaction.get("currency", "USD"),
+                channel=transaction.get("channel"),
+                product_type=transaction.get("product_type"),
+                originator_name=transaction.get("originator_name"),
+                originator_account=transaction.get("originator_account"),
+                originator_country=transaction.get("originator_country"),
+                beneficiary_name=transaction.get("beneficiary_name"),
+                beneficiary_account=transaction.get("beneficiary_account"),
+                beneficiary_country=transaction.get("beneficiary_country"),
+                customer_id=transaction.get("customer_id"),
+                customer_segment=transaction.get("customer_segment"),
+                customer_risk_rating=transaction.get("customer_risk_rating"),
+                customer_kyc_date=transaction.get("customer_kyc_date"),
+                swift_mt=transaction.get("swift_mt"),
+                ordering_institution_bic=transaction.get("ordering_institution_bic"),
+                beneficiary_institution_bic=transaction.get("beneficiary_institution_bic"),
+                swift_f50_present=transaction.get("swift_f50_present"),
+                swift_f59_present=transaction.get("swift_f59_present"),
+                swift_f70_purpose=transaction.get("swift_f70_purpose"),
+                swift_f71_charges=transaction.get("swift_f71_charges"),
+                pep_indicator=transaction.get("pep_indicator"),
+                sanctions_hit=transaction.get("sanctions_hit"),
+                high_risk_country=transaction.get("high_risk_country"),
+                structuring_flag=transaction.get("structuring_flag"),
+                status=TransactionStatus.PROCESSING,
+                processing_started_at=datetime.now(timezone.utc),
+                raw_data=transaction,
+            )
+            db_session.add(db_transaction)
+            db_session.commit()
+            logger.info(f"✅ Persisted NEW transaction {transaction_id} to database")
+    except Exception as e:
+        logger.error(f"❌ Failed to persist transaction: {e}", exc_info=True)
+        db_session.rollback()
+        raise RuntimeError(f"Cannot persist transaction {transaction_id}: {e}")
+    
+    # 2. Create workflow and stream for detailed logging
+    from workflows.transaction_workflow import create_transaction_workflow
+    
+    app = create_transaction_workflow(
+        db_session, llm_service, pinecone_internal, pinecone_external
+    )
+    
+    agent_emojis = {
+        "context_builder": "📋",
+        "retrieval": "🔍",
+        "applicability": "✅",
+        "evidence_mapper": "🗺️",
+        "control_test": "🧪",
+        "feature_service": "🔢",
+        "bayesian_engine": "📊",
+        "pattern_detector": "🎯",
+        "decision_fusion": "⚖️",
+        "analyst_writer": "📝",
+        "alert_composer": "🚨",
+        "remediation": "🔧",
+        "persistor": "💾",
+    }
+    
+    # Execute using stream to capture each node's output
+    from datetime import datetime, timezone
+    start_time = datetime.now(timezone.utc)
+    initial_state = {
+        "transaction": transaction,
+        "transaction_id": transaction.get("transaction_id"),
+        "processing_start_time": start_time,
+        "errors": [],
+    }
     
     try:
-        # Execute workflow
-        result = await execute_transaction_workflow(
-            transaction=transaction,
-            db_session=db_session,
-            llm_service=llm_service,
-            pinecone_internal=pinecone_internal,
-            pinecone_external=pinecone_external,
-        )
+        result = None
+        async for event in app.astream(initial_state):
+            # event is a dict with node_name: state
+            for node_name, state in event.items():
+                emoji = agent_emojis.get(node_name, "▶️")
+                print(f"\n{'─' * 80}")
+                print(f"{emoji}  {node_name.replace('_', ' ').upper()} AGENT")
+                print(f"{'─' * 80}")
+                display_agent_output(node_name, state)
+                result = state
         
-        logger.info("="*80)
-        logger.info("WORKFLOW EXECUTION COMPLETED")
-        logger.info("="*80)
+        if result:
+            # processing_end_time already set by persistor agent
+            pass
         
-        # Log key results
-        if result.get("errors"):
-            logger.error(f"Errors encountered: {result['errors']}")
+        # Final summary - calculate processing time from datetime objects
+        start_time_dt = result.get('processing_start_time')
+        end_time_dt = result.get('processing_end_time')
+        if start_time_dt and end_time_dt:
+            processing_time = (end_time_dt - start_time_dt).total_seconds()
+        else:
+            processing_time = 0.0
         
-        if result.get("risk_score") is not None:
-            logger.info(f"Final Risk Score: {result['risk_score']}")
+        print("\n" + "=" * 80)
+        print("✅  WORKFLOW COMPLETED SUCCESSFULLY")
+        print("=" * 80)
+        print(f"\n⏱️  PERFORMANCE:")
+        print(f"   • Total Processing Time: {processing_time:.2f}s")
         
-        if result.get("risk_band"):
-            logger.info(f"Risk Band: {result['risk_band']}")
+        # Errors
+        errors = result.get('errors', [])
+        if errors:
+            print(f"\n❌ ERRORS:")
+            for error in errors:
+                print(f"   • {error}")
         
-        if result.get("applicable_rules"):
-            logger.info(f"Applicable Rules: {len(result['applicable_rules'])}")
+        print(f"\n⏱️  PERFORMANCE:")
+        print(f"   • Total Processing Time: {processing_time:.2f}s")
         
-        if result.get("alerts"):
-            logger.info(f"Alerts Generated: {len(result['alerts'])}")
+        errors = result.get('errors', [])
+        if errors:
+            print(f"\n❌ ERRORS:")
+            for error in errors:
+                print(f"   • {error}")
         
-        processing_time = result.get('processing_end_time', 0) - result.get('processing_start_time', 0)
-        logger.info(f"Processing Time: {processing_time:.2f}s")
-        
-        logger.info("="*80)
+        print("\n" + "=" * 80 + "\n")
         
         return result
         
     except Exception as e:
-        logger.error(f"WORKFLOW EXECUTION FAILED: {e}", exc_info=True)
+        print(f"\n{'=' * 80}")
+        print(f"❌  WORKFLOW EXECUTION FAILED")
+        print(f"{'=' * 80}")
+        print(f"Error: {str(e)}")
+        print(f"{'=' * 80}\n")
         raise
 
 
@@ -261,81 +585,32 @@ def save_results(result: dict, log_file: Path):
 
 
 def print_summary(result: dict):
-    """Print a human-readable summary of the workflow results."""
+    """Print a concise summary of the workflow results."""
     
     print("\n" + "="*80)
-    print("WORKFLOW EXECUTION SUMMARY")
+    print("📋 QUICK SUMMARY")
     print("="*80)
     
-    # Transaction Info
-    print("\n📊 Transaction:")
-    print(f"  ID: {result.get('transaction_id')}")
-    print(f"  Amount: {result.get('transaction', {}).get('currency')} {result.get('transaction', {}).get('amount', 0):,.2f}")
+    # Key metrics only
+    print(f"\n� Transaction: {result.get('transaction_id')}")
+    print(f"💰 Amount: {result.get('transaction', {}).get('currency')} {result.get('transaction', {}).get('amount', 0):,.2f}")
+    print(f"⚖️  Risk: {result.get('risk_score', 0):.2f} ({result.get('risk_band', 'N/A')})")
+    print(f"📚 Rules: {len(result.get('applicable_rules', []))} applicable")
     
-    # Risk Assessment
-    print("\n⚠️  Risk Assessment:")
-    print(f"  Risk Score: {result.get('risk_score', 'N/A')}")
-    print(f"  Risk Band: {result.get('risk_band', 'N/A')}")
-    
-    # Rules Analysis
-    print("\n📋 Rules Analysis:")
-    print(f"  Retrieved Rules: {len(result.get('retrieved_rules', []))}")
-    print(f"  Applicable Rules: {len(result.get('applicable_rules', []))}")
-    
-    # Control Tests
-    control_results = result.get('control_results', [])
-    if control_results:
-        print(f"\n🔍 Control Tests: {len(control_results)}")
-        passed = sum(1 for c in control_results if c.get('status') == 'pass')
-        failed = sum(1 for c in control_results if c.get('status') == 'fail')
-        print(f"  Passed: {passed}")
-        print(f"  Failed: {failed}")
-    
-    # Features
-    features = result.get('features', {})
-    if features:
-        print(f"\n🔢 Features Extracted: {len(features)}")
-        print(f"  High Value: {features.get('is_high_value', 'N/A')}")
-        print(f"  Cross-Border: {features.get('is_cross_border', 'N/A')}")
-    
-    # Patterns
-    patterns = result.get('detected_patterns', [])
-    if patterns:
-        print(f"\n🎯 Patterns Detected: {len(patterns)}")
-        for pattern in patterns[:3]:  # Show first 3
-            print(f"  - {pattern.get('pattern_type', 'Unknown')}: {pattern.get('description', '')}")
-    
-    # Alerts
-    alerts = result.get('alerts', [])
-    if alerts:
-        print(f"\n🚨 Alerts Generated: {len(alerts)}")
-        for alert in alerts[:3]:  # Show first 3
-            print(f"  - {alert.get('severity', 'N/A')}: {alert.get('title', 'Alert')}")
-    
-    # Compliance Analysis
-    analysis = result.get('compliance_analysis', '')
-    if analysis:
-        print(f"\n📝 Compliance Analysis:")
-        print(f"  {analysis[:200]}..." if len(analysis) > 200 else f"  {analysis}")
-    
-    # Remediation
-    remediation = result.get('remediation_actions', [])
-    if remediation:
-        print(f"\n🔧 Remediation Actions: {len(remediation)}")
-        for action in remediation[:3]:  # Show first 3
-            print(f"  - {action.get('action_type', 'Unknown')}: {action.get('description', '')}")
-    
+    # Errors
     # Errors
     errors = result.get('errors', [])
     if errors:
-        print(f"\n❌ Errors: {len(errors)}")
-        for error in errors:
-            print(f"  - {error}")
+        print(f"❌ Errors: {len(errors)}")
+    else:
+        print(f"✅ Status: Completed successfully")
     
-    # Performance
-    processing_time = result.get('processing_end_time', 0) - result.get('processing_start_time', 0)
-    print(f"\n⏱️  Performance:")
-    print(f"  Processing Time: {processing_time:.2f}s")
+    # Performance - calculate from datetime objects
+    start_time_dt = result.get('processing_start_time')
+    end_time_dt = result.get('processing_end_time')
+    if start_time_dt and end_time_dt:
+        processing_time = (end_time_dt - start_time_dt).total_seconds()
+        print(f"⏱️  Time: {processing_time:.2f}s")
     
     print("\n" + "="*80 + "\n")
 
@@ -401,15 +676,18 @@ async def main():
         logger.info("\nCreating sample transaction...")
         
         # You can change the scenario here: "high_risk", "medium_risk", "low_risk", "structuring"
-        transaction = create_sample_transaction(scenario="high_risk")
+        transaction_data = create_sample_transaction(scenario="high_risk")
         
-        logger.info(f"Created transaction: {transaction['transaction_id']}")
+        logger.info(f"Created transaction: {transaction_data['transaction_id']}")
+        
+        # Note: The workflow now handles persisting the transaction to the database
+        # No need to manually save it here
         
         # Execute workflow
         logger.info("\nExecuting workflow...\n")
         
         result = await run_workflow_with_logging(
-            transaction=transaction,
+            transaction=transaction_data,
             db_session=db_session,
             llm_service=llm_service,
             pinecone_internal=pinecone_internal,

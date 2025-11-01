@@ -60,7 +60,8 @@ class RetrievalAgent(Part1Agent):
                 return state
 
             transaction = state.get("transaction", {})
-            jurisdiction = transaction.get("jurisdiction", "HK")
+            # Don't filter by jurisdiction - retrieve all relevant rules regardless of jurisdiction
+            # This allows rules from ADGM, HK, SG, etc. to all be considered
             
             # Get current date for effective_date filtering
             from datetime import datetime
@@ -74,29 +75,30 @@ class RetrievalAgent(Part1Agent):
                 self.logger.info(f"Searching for query: {query[:100]}...")
 
                 # Search internal rules (Pinecone internal index) - uses Pinecone's built-in embedding
+                # Use "__default__" namespace as per Pinecone API 2025-04
+                # Only filter by is_active, not jurisdiction (to allow multi-jurisdiction rules)
                 internal_results = self.pinecone_internal.search_by_text(
                     query_text=query,
                     top_k=10,
                     filters={
-                        "jurisdiction": jurisdiction,
                         "is_active": True,
                     },
-                    namespace="internal-rules"
+                    namespace="__default__"
                 )
 
                 # Search external rules (Pinecone external index) - uses Pinecone's built-in embedding
+                # No filters for external rules (might not have is_active field)
                 external_results = self.pinecone_external.search_by_text(
                     query_text=query,
                     top_k=10,
-                    filters={
-                        "jurisdiction": jurisdiction,
-                    },
-                    namespace="external-rules"
+                    filters=None,
+                    namespace="__default__"
                 )
 
                 # Combine and deduplicate
                 for result in internal_results + external_results:
-                    rule_id = result.get("rule_id")
+                    # Handle both new schema (rule_id) and old schema (passage_id)
+                    rule_id = result.get("rule_id") or result.get("passage_id")
                     if rule_id and rule_id not in seen_rule_ids:
                         seen_rule_ids.add(rule_id)
                         
@@ -110,16 +112,34 @@ class RetrievalAgent(Part1Agent):
                             except:
                                 pass  # Keep rule if date parsing fails
                         
+                        # Transform Pinecone data schema to expected agent schema
+                        # Handle both direct fields and nested metadata
+                        passage_ref = result.get("passage_ref", "N/A")
+                        document_id = result.get("document_id", "N/A")
+                        passage_text = result.get("passage_text", "") or result.get("description", "")
+                        jurisdiction = result.get("jurisdiction", "ADGM")
+                        
+                        # Build human-readable title and source
+                        title = result.get("title") or f"{jurisdiction} AML - Section {passage_ref}"
+                        source = result.get("source") or f"{jurisdiction} AML Rulebook, Doc {document_id}, {passage_ref}"
+                        
                         all_rules.append({
                             "rule_id": rule_id,
-                            "title": result.get("title", ""),
-                            "description": result.get("description", ""),
-                            "rule_type": result.get("rule_type", ""),
+                            "title": title,
+                            "description": passage_text or result.get("text", ""),
+                            "rule_type": result.get("rule_type", "aml_requirement"),
                             "severity": result.get("severity", "medium"),
-                            "jurisdiction": result.get("jurisdiction", ""),
-                            "source": result.get("source", ""),
+                            "jurisdiction": jurisdiction,
+                            "source": source,
                             "score": result.get("score", 0.0),
-                            "metadata": result.get("metadata", {}),
+                            "metadata": {
+                                "document_id": document_id,
+                                "passage_ref": passage_ref,
+                                "full_text_length": result.get("full_text_length"),
+                                "is_active": result.get("is_active", True),
+                                "document_type": result.get("document_type"),
+                                "ingestion_date": result.get("ingestion_date"),
+                            },
                         })
 
             # Sort by score (descending) and take top 20

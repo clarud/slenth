@@ -8,3 +8,4 @@ slenth_env_2/
 __pycache__/
 services/__pycache__/
 *.pyc  
+data/workflow_results/*
