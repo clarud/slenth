@@ -37,11 +37,11 @@ class FINMACrawler:
         logger.info(f"FINMA discovered {len(pdf_links)} PDF links")
         
         circulars: List[Dict] = []
-        for link in pdf_links[:25]:
+        for link in pdf_links[:25]:  # Limit to 25 for performance
             try:
                 doc = self._parse_pdf(link["url"])
                 title = link.get("title") or doc.get("title") or "FINMA Circular"
-                date = self._parse_date(link.get("date_text")) or datetime.utcnow()
+                date = self._parse_date(link.get("date_text")) or datetime.now()
                 content = doc.get("text", "")
                 circulars.append({
                     "title": title,
@@ -62,7 +62,7 @@ class FINMACrawler:
         """Discover PDF links from FINMA circulars page using BeautifulSoup."""
         try:
             if self.use_cached_html:
-                # FINMA uses AJAX, so for testing/fallback we can use cached HTML
+                # For testing/fallback we can use cached HTML
                 cached_path = os.path.join(os.path.dirname(__file__), '..', 'finma.html')
                 with open(cached_path, 'r', encoding='utf-8') as f:
                     html_content = f.read()
@@ -71,36 +71,67 @@ class FINMACrawler:
                 response = self.session.get(url, timeout=30)
                 response.raise_for_status()
                 soup = BeautifulSoup(response.content, 'lxml')
+            
             links: List[Dict] = []
             seen = set()
-            all_pdf_links = 0
+            
+            # Find all PDF links with FINMA circular pattern
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href']
                 if '.pdf' not in href.lower():
                     continue
-                all_pdf_links += 1
+                
+                # Build absolute URL
                 abs_url = urljoin(url, href)
+                
+                # Filter for rundschreiben/circulars
                 if '/rundschreiben/' not in abs_url.lower() and '/circulars/' not in abs_url.lower():
                     continue
+                
+                # Prefer English PDFs (sc_lang=en) or PDFs without language specified
+                if '?sc_lang=' in abs_url and 'sc_lang=en' not in abs_url:
+                    continue
+                
                 if abs_url in seen:
                     continue
+                
+                # Get link text
+                link_text = a_tag.get_text(strip=True)
+                
+                # Skip if link_text is just language codes or empty
+                if not link_text or link_text in ['DE', 'FR', 'IT', 'EN'] or len(link_text) < 5:
+                    continue
+                
                 seen.add(abs_url)
-                title = a_tag.get_text(strip=True)
-                if not title or len(title) < 5:
-                    parent = a_tag.find_parent(['div', 'td', 'li'])
-                    if parent:
-                        title = parent.get_text(strip=True)[:200]
+                
+                # Extract title and date
+                title = link_text
                 date_text = ""
-                if a_tag.parent:
-                    date_spans = a_tag.parent.find_all(['span', 'time'], class_=re.compile(r'date|update', re.I))
-                    if date_spans:
-                        date_text = date_spans[0].get_text(strip=True)
+                
+                # Look for the parent container that has the circular information
+                parent = a_tag.find_parent(['div', 'li', 'article', 'p'])
+                if parent:
+                    # Extract date from "Updated: DD.MM.YYYY" pattern
+                    updated_match = re.search(r'Updated:\s*(\d{1,2}\.\d{1,2}\.\d{4})', parent.get_text())
+                    if updated_match:
+                        date_text = updated_match.group(1)
+                
+                # Clean up title - remove metadata patterns
+                title = re.sub(r'Updated:.*?Language\(s\):', '', title, flags=re.DOTALL).strip()
+                title = re.sub(r'Updated:.*?Size:.*?MB', '', title, flags=re.DOTALL).strip()
+                title = title.replace('Language(s):', '').strip()
+                title = re.sub(r'\s+', ' ', title)  # Normalize whitespace
+                
+                if not title or len(title) < 5:
+                    continue
+                
                 links.append({
                     "url": abs_url,
-                    "title": title or os.path.basename(abs_url),
+                    "title": title,
                     "date_text": date_text,
                 })
-            logger.info(f"FINMA found {all_pdf_links} total PDFs, {len(links)} circular PDF links")
+            
+            logger.info(f"FINMA found {len(links)} circular PDF links")
             return links
         except Exception as e:
             logger.error(f"Failed to discover PDF links from {url}: {e}")
@@ -140,14 +171,14 @@ class FINMACrawler:
         if not text:
             return None
         patterns = [
-            r"(\d{1,2})\.(\d{1,2})\.(\d{4})",
-            r"(\d{4})-(\d{2})-(\d{2})",
-            r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})",
+            r"(\d{1,2})\.(\d{1,2})\.(\d{4})",  # Swiss format DD.MM.YYYY
+            r"(\d{4})-(\d{2})-(\d{2})",  # ISO format YYYY-MM-DD
+            r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})",  # DD Month YYYY
         ]
         months = {
             m.lower(): i for i, m in enumerate([
-                "January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December"
+                "january", "february", "march", "april", "may", "june",
+                "july", "august", "september", "october", "november", "december"
             ], 1)
         }
         for pat in patterns:
@@ -155,13 +186,13 @@ class FINMACrawler:
             if not m:
                 continue
             try:
-                if pat == patterns[0]:
+                if pat == patterns[0]:  # DD.MM.YYYY
                     d, mm, y = m.groups()
                     return datetime(int(y), int(mm), int(d))
-                elif pat == patterns[1]:
+                elif pat == patterns[1]:  # YYYY-MM-DD
                     y, mm, dd = m.groups()
                     return datetime(int(y), int(mm), int(dd))
-                elif pat == patterns[2]:
+                elif pat == patterns[2]:  # DD Month YYYY
                     d = int(m.group(1))
                     mon = months.get(m.group(2).lower(), 1)
                     y = int(m.group(3))
@@ -208,7 +239,7 @@ class FINMACrawler:
                     out.parent.mkdir(parents=True, exist_ok=True)
                     payload = {
                         **circular,
-                        "metadata": {"crawled_at": datetime.utcnow().isoformat()},
+                        "metadata": {"crawled_at": datetime.now().isoformat()},
                     }
                     out.write_text((out.read_text(encoding="utf-8") if out.exists() else "") +
                                     (json.dumps(payload, default=str) + "\n"), encoding="utf-8")
@@ -245,7 +276,7 @@ class FINMACrawler:
                         jurisdiction=circular["jurisdiction"],
                         rule_type=circular["rule_type"],
                         meta={
-                            "crawled_at": datetime.utcnow().isoformat(),
+                            "crawled_at": datetime.now().isoformat(),
                             "url": circular["url"],
                             "date": circular["date"].isoformat() if circular.get("date") else None,
                         }
@@ -280,11 +311,15 @@ class FINMACrawler:
 
 
 if __name__ == "__main__":
-    # Use cached HTML since FINMA uses AJAX
-    crawler = FINMACrawler(use_cached_html=True)
+    # Use live mode to fetch from website
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    crawler = FINMACrawler(use_cached_html=False)
     circulars = crawler.crawl()
-    print(f"Found {len(circulars)} FINMA circulars")
-    for c in circulars[:3]:
-        print(f"- {c['title'][:70]}")
+    print(f"\nFound {len(circulars)} FINMA circulars")
+    for c in circulars[:5]:
+        print(f"\n- {c['title']}")
+        print(f"  URL: {c['url']}")
         print(f"  Date: {c['date']}")
         print(f"  Content: {len(c['content'])} chars")

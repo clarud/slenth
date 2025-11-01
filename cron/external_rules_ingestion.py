@@ -324,14 +324,9 @@ def run_all_crawlers():
     """
     Run all regulatory crawlers and ingest rules into PostgreSQL + Pinecone.
     
-    Workflow (similar to internal rules):
-    1. Crawl each regulator's website
-    2. Extract PDF content and metadata
-    3. Check for duplicates (by URL)
-    4. Chunk large documents (>2000 words)
-    5. Generate embeddings with context prefix
-    6. Batch upsert to Pinecone (50 vectors at a time)
-    7. Save to PostgreSQL
+    Updated workflow:
+    - HKMA & MAS: Use crawler's built-in save_to_db() method (crawl + upsert)
+    - FINMA: Parse local PDFs and upsert (use save_rules_to_db for consistency)
     """
     logger.info("="*80)
     logger.info("🚀 EXTERNAL RULES INGESTION JOB - START")
@@ -342,7 +337,6 @@ def run_all_crawlers():
     
     try:
         total_saved = 0
-        total_chunks = 0
         
         # HKMA (Hong Kong Monetary Authority)
         logger.info("\n" + "="*80)
@@ -356,9 +350,10 @@ def run_all_crawlers():
             logger.info(f"✅ Crawled {len(hkma_circulars)} circulars")
             
             if hkma_circulars:
-                hkma_saved = save_rules_to_db(hkma_circulars, db, "HKMA", "HK")
+                # Use crawler's built-in save_to_db method
+                hkma_saved = hkma_crawler.save_to_db(hkma_circulars, db)
                 total_saved += hkma_saved
-                logger.info(f"💾 Ingested {hkma_saved} rule chunks to PostgreSQL + Pinecone")
+                logger.info(f"💾 HKMA: Ingested {hkma_saved} rule chunks to PostgreSQL + Pinecone")
             else:
                 logger.warning("⚠️  No new HKMA circulars found")
                 
@@ -371,43 +366,109 @@ def run_all_crawlers():
         logger.info("="*80)
         
         try:
-            mas_crawler = MASCrawler(use_cached_html=False)
-            logger.info(f"Crawling: {mas_crawler.base_url}")
+            mas_crawler = MASCrawler(use_cached_html=False, max_pages=10)
+            logger.info(f"Crawling: {mas_crawler.base_url_template.format(page=1)} (up to 10 pages)")
             
-            mas_notices = mas_crawler.crawl()
-            logger.info(f"✅ Crawled {len(mas_notices)} notices")
+            mas_circulars = mas_crawler.crawl()
+            logger.info(f"✅ Crawled {len(mas_circulars)} circulars")
             
-            if mas_notices:
-                mas_saved = save_rules_to_db(mas_notices, db, "MAS", "SG")
+            if mas_circulars:
+                # Use crawler's built-in save_to_db method
+                mas_saved = mas_crawler.save_to_db(mas_circulars, db)
                 total_saved += mas_saved
-                logger.info(f"💾 Ingested {mas_saved} rule chunks to PostgreSQL + Pinecone")
+                logger.info(f"💾 MAS: Ingested {mas_saved} rule chunks to PostgreSQL + Pinecone")
             else:
-                logger.warning("⚠️  No new MAS notices found")
+                logger.warning("⚠️  No new MAS circulars found")
                 
         except Exception as e:
             logger.error(f"❌ MAS crawler failed: {str(e)}", exc_info=True)
         
         # FINMA (Swiss Financial Market Supervisory Authority)
+        # For FINMA, parse local PDFs from directory instead of crawling
         logger.info("\n" + "="*80)
         logger.info("[3/3] FINMA - Swiss Financial Market Supervisory Authority")
         logger.info("="*80)
         
         try:
-            finma_crawler = FINMACrawler(use_cached_html=False)
-            logger.info(f"Crawling: {finma_crawler.base_url}")
+            from pathlib import Path
+            import hashlib
+            from PyPDF2 import PdfReader
             
-            finma_circulars = finma_crawler.crawl()
-            logger.info(f"✅ Crawled {len(finma_circulars)} circulars")
+            # FINMA PDF directory
+            finma_pdf_dir = Path(r"c:\Users\clare\OneDrive\Desktop\finma")
             
-            if finma_circulars:
-                finma_saved = save_rules_to_db(finma_circulars, db, "FINMA", "CH")
-                total_saved += finma_saved
-                logger.info(f"💾 Ingested {finma_saved} rule chunks to PostgreSQL + Pinecone")
+            if not finma_pdf_dir.exists():
+                logger.warning(f"⚠️  FINMA PDF directory not found: {finma_pdf_dir}")
             else:
-                logger.warning("⚠️  No new FINMA circulars found")
+                pdf_files = list(finma_pdf_dir.glob("*.pdf"))
+                logger.info(f"📁 Found {len(pdf_files)} PDF files in {finma_pdf_dir}")
+                
+                if pdf_files:
+                    finma_rules = []
+                    
+                    for pdf_path in pdf_files:
+                        try:
+                            # Parse PDF
+                            reader = PdfReader(str(pdf_path))
+                            text_parts = []
+                            for page in reader.pages:
+                                try:
+                                    page_text = page.extract_text()
+                                    if page_text:
+                                        text_parts.append(page_text)
+                                except Exception as e:
+                                    logger.warning(f"Failed to extract page from {pdf_path.name}: {e}")
+                            
+                            content = "\n\n".join(text_parts)
+                            
+                            if len(content) < 100:
+                                logger.warning(f"Skipping {pdf_path.name}: insufficient content ({len(content)} chars)")
+                                continue
+                            
+                            # Extract metadata from filename (e.g., "finma rs 2016 02.pdf")
+                            filename = pdf_path.stem.lower()
+                            parts = filename.split()
+                            
+                            year = None
+                            number = None
+                            for i, part in enumerate(parts):
+                                if part.isdigit() and len(part) == 4 and 2000 <= int(part) <= 2030:
+                                    year = part
+                                    if i + 1 < len(parts) and parts[i + 1].isdigit():
+                                        number = parts[i + 1]
+                                    break
+                            
+                            title = f"FINMA Circular {year}/{number}" if year and number else pdf_path.stem
+                            
+                            # Create rule dict
+                            finma_rules.append({
+                                "title": title,
+                                "content": content,
+                                "url": f"file://{pdf_path}",
+                                "date": None,  # Parse from content if needed
+                                "source": "FINMA",
+                                "jurisdiction": "CH",
+                                "rule_type": "circular",
+                            })
+                            
+                            logger.info(f"✅ Parsed: {title} ({len(content.split())} words)")
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to parse {pdf_path.name}: {e}")
+                            continue
+                    
+                    if finma_rules:
+                        # Use the centralized save_rules_to_db function
+                        finma_saved = save_rules_to_db(finma_rules, db, "FINMA", "CH")
+                        total_saved += finma_saved
+                        logger.info(f"💾 FINMA: Ingested {finma_saved} rule chunks to PostgreSQL + Pinecone")
+                    else:
+                        logger.warning("⚠️  No FINMA PDFs could be parsed")
+                else:
+                    logger.warning("⚠️  No PDF files found in FINMA directory")
                 
         except Exception as e:
-            logger.error(f"❌ FINMA crawler failed: {str(e)}", exc_info=True)
+            logger.error(f"❌ FINMA PDF parsing failed: {str(e)}", exc_info=True)
         
         # Final summary
         logger.info("\n" + "="*80)

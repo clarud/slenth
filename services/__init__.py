@@ -5,7 +5,7 @@ This package contains service classes for:
 - Vector database operations (Pinecone)
 - LLM interactions (Groq via LangChain)
 - Alert management
-- World-Check One API integration
+- Dilisense API integration (Background checks)
 - Audit logging
 """
 
@@ -15,10 +15,12 @@ from .pinecone_db import PineconeService
 from .llm import LLMService
 from .alert_service import AlertService
 from .audit import AuditService
+from .dilisense import DilisenseService
 
 __all__ = [
     "PineconeService",
     "LLMService",
     "AlertService",
     "AuditService",
+    "DilisenseService",
 ]
