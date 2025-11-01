@@ -14,8 +14,8 @@ class TransactionCreate(BaseModel):
     transaction_id: str = Field(..., description="Unique transaction identifier")
     booking_jurisdiction: str = Field(..., description="Booking jurisdiction")
     regulator: str = Field(..., description="Regulatory authority")
-    booking_datetime: str = Field(..., description="Booking timestamp")
-    value_date: str = Field(..., description="Value date")
+    booking_datetime: datetime = Field(..., description="Booking timestamp")
+    value_date: datetime = Field(..., description="Value date (date-only accepted)")
     amount: float = Field(..., description="Transaction amount")
     currency: str = Field(..., description="Currency code")
     channel: str = Field(..., description="Transaction channel")
@@ -32,7 +32,8 @@ class TransactionCreate(BaseModel):
     beneficiary_country: str
     
     # SWIFT fields
-    swift_mt: str
+    # Some transactions may not be SWIFT MT messages; allow missing
+    swift_mt: Optional[str] = None
     ordering_institution_bic: Optional[str] = None
     beneficiary_institution_bic: Optional[str] = None
     swift_f50_present: bool = False
@@ -108,6 +109,55 @@ class TransactionCreate(BaseModel):
                 "customer_risk_rating": "Medium",
             }
         }
+
+    # Custom parsing for non-ISO date formats from CSV (e.g., "24/4/2024")
+    @validator("value_date", pre=True)
+    def _parse_value_date(cls, v):
+        if v is None or v == "":
+            return v
+        if isinstance(v, datetime):
+            return v
+        s = str(v).strip()
+        # Handle ISO-like with optional trailing Z
+        try:
+            ss = s[:-1] if s.endswith("Z") else s
+            return datetime.fromisoformat(ss)
+        except Exception:
+            pass
+        # Handle D/M/YYYY (or DD/MM/YYYY) with slashes
+        if "/" in s:
+            try:
+                parts = s.split("/")
+                if len(parts) == 3:
+                    d, m, y = parts
+                    return datetime(int(y), int(m), int(d), 0, 0, 0)
+            except Exception:
+                pass
+        return s  # Let downstream validation surface a clear error
+
+    @validator("booking_datetime", pre=True)
+    def _parse_booking_datetime(cls, v):
+        if v is None or v == "":
+            return v
+        if isinstance(v, datetime):
+            return v
+        s = str(v).strip()
+        # Allow ISO8601 with optional trailing Z
+        try:
+            ss = s[:-1] if s.endswith("Z") else s
+            return datetime.fromisoformat(ss)
+        except Exception:
+            pass
+        # Fallback: if comes as D/M/YYYY, normalize to midnight
+        if "/" in s:
+            try:
+                parts = s.split("/")
+                if len(parts) == 3:
+                    d, m, y = parts
+                    return datetime(int(y), int(m), int(d), 0, 0, 0)
+            except Exception:
+                pass
+        return s
 
 
 class TransactionResponse(BaseModel):

@@ -12,15 +12,20 @@ import logging
 import time
 from typing import List, Optional
 
+from config import settings
+
+# OpenAI client (default provider)
 import openai
+try:
+    import groq  # type: ignore
+except Exception:  # pragma: no cover
+    groq = None
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
-
-from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +35,22 @@ class EmbeddingService:
 
     def __init__(self):
         """Initialize OpenAI client."""
-        self.client = openai.OpenAI(api_key=settings.openai_api_key)
+        self.provider = getattr(settings, "embeddings_provider", "openai").lower()
         self.model = settings.embedding_model
-        self.embedding_dim = settings.embedding_dim
+        self.embedding_dim = settings.embedding_dimension
         self.batch_size = settings.embedding_batch_size
+        if self.provider == "openai":
+            self.client = openai.OpenAI(api_key=settings.openai_api_key)
+        elif self.provider == "groq":
+            if groq is None:
+                logger.warning("groq package not installed; embeddings will return zero vectors.")
+                self.client = None
+            else:
+                # Placeholder init; actual embeddings support depends on Groq API
+                self.client = groq.Groq(api_key=getattr(settings, "groq_api_key", None))
+        else:
+            logger.warning(f"Unknown embeddings provider '{self.provider}', defaulting to zero vectors.")
+            self.client = None
         self.total_tokens = 0
         logger.info(f"Initialized EmbeddingService with model: {self.model}")
 
@@ -57,15 +74,18 @@ class EmbeddingService:
                 logger.warning("Empty text provided for embedding")
                 return [0.0] * self.embedding_dim
 
-            response = self.client.embeddings.create(input=text, model=self.model)
+            if self.provider == "openai" and self.client is not None:
+                response = self.client.embeddings.create(input=text, model=self.model)
+                embedding = response.data[0].embedding
+                self.total_tokens += getattr(response, "usage", {}).get("total_tokens", 0)
+                logger.debug(
+                    f"Generated embedding for text of length {len(text)}"
+                )
+                return embedding
 
-            embedding = response.data[0].embedding
-            self.total_tokens += response.usage.total_tokens
-
-            logger.debug(
-                f"Generated embedding for text of length {len(text)} ({response.usage.total_tokens} tokens)"
-            )
-            return embedding
+            # Fallback for unsupported providers
+            logger.warning(f"Embeddings provider '{self.provider}' not fully implemented; returning zeros.")
+            return [0.0] * self.embedding_dim
 
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
@@ -104,13 +124,16 @@ class EmbeddingService:
             valid_batch = [t if t and t.strip() else " " for t in batch]
 
             try:
-                response = self.client.embeddings.create(
-                    input=valid_batch, model=self.model
-                )
-
-                batch_embeddings = [item.embedding for item in response.data]
-                embeddings.extend(batch_embeddings)
-                self.total_tokens += response.usage.total_tokens
+                if self.provider == "openai" and self.client is not None:
+                    response = self.client.embeddings.create(
+                        input=valid_batch, model=self.model
+                    )
+                    batch_embeddings = [item.embedding for item in response.data]
+                    embeddings.extend(batch_embeddings)
+                    self.total_tokens += getattr(response, "usage", {}).get("total_tokens", 0)
+                else:
+                    # Fallback zeros for unsupported providers
+                    embeddings.extend([[0.0] * self.embedding_dim] * len(batch))
 
                 if show_progress:
                     logger.info(

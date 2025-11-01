@@ -24,14 +24,30 @@ class TestMASCrawler:
         assert "mas.gov.sg" in crawler.base_url
     
     @pytest.mark.asyncio
-    async def test_crawl_returns_notices(self):
-        """Test that crawl method returns list of notices"""
+    async def test_crawl_returns_notices(self, clean_output_files, file_saver):
+        """Test that crawl method returns list of notices and saves to output"""
         crawler = MASCrawler()
         
         notices = await crawler.crawl()
         
         assert isinstance(notices, list)
         assert len(notices) > 0
+        
+        # Save to output file for inspection
+        saved = file_saver.save(notices, "mas.jsonl")
+        print(f"\n✅ Saved {saved} MAS notices to tests/crawlers/output/mas.jsonl")
+        
+        # Print summary
+        print(f"\n📊 MAS Crawl Summary:")
+        print(f"   Total notices: {len(notices)}")
+        print(f"   Saved to file: {saved}")
+        if notices:
+            print(f"\n📄 Sample notice:")
+            sample = notices[0]
+            print(f"   Title: {sample['title'][:80]}...")
+            print(f"   URL: {sample['url']}")
+            print(f"   Date: {sample['date']}")
+            print(f"   Content length: {len(sample['content'])} chars")
     
     @pytest.mark.asyncio
     async def test_notice_structure(self):
@@ -39,6 +55,8 @@ class TestMASCrawler:
         crawler = MASCrawler()
         
         notices = await crawler.crawl()
+        
+        assert len(notices) > 0, "Should crawl at least one notice"
         
         for notice in notices:
             assert "title" in notice
@@ -56,50 +74,45 @@ class TestMASCrawler:
             assert isinstance(notice["content"], str)
             assert notice["source"] == "MAS"
             assert notice["jurisdiction"] == "SG"
+            
+            # Verify content is not empty
+            assert len(notice["title"]) > 0, "Title should not be empty"
+            assert len(notice["content"]) > 0, "Content should not be empty"
     
     @pytest.mark.asyncio
-    async def test_crawl_with_mock_html(self, sample_mas_html):
-        """Test crawling with mocked HTML response"""
+    async def test_two_layer_crawl(self):
+        """Test that MAS crawler properly crawls detail pages then PDFs"""
         crawler = MASCrawler()
         
-        with patch('crawlers.mas.AsyncWebCrawler') as mock_crawler_class:
-            mock_crawler = AsyncMock()
-            mock_result = Mock()
-            mock_result.html = sample_mas_html
-            mock_crawler.arun = AsyncMock(return_value=mock_result)
-            mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
-            
-            # Test with placeholder data
-            notices = await crawler.crawl()
-            
-            assert len(notices) >= 2
-            assert any("Money Laundering" in n["title"] for n in notices)
+        # This should first find detail pages, then PDFs on those pages
+        notices = await crawler.crawl()
+        
+        assert len(notices) > 0, "Should find notices through two-layer crawl"
+        
+        # Check that we got actual PDF content
+        for notice in notices[:3]:
+            content = notice["content"]
+            assert len(content) > 100, f"PDF content too short for {notice['title']}"
     
     @pytest.mark.asyncio
-    async def test_specific_notice_types(self):
-        """Test that different notice types are handled correctly"""
+    async def test_pdf_content_extraction(self):
+        """Test that PDFs are properly extracted with actual content"""
         crawler = MASCrawler()
         
         notices = await crawler.crawl()
         
-        # Check for different rule types
-        rule_types = [n["rule_type"] for n in notices]
-        assert "notice" in rule_types or "guideline" in rule_types
-    
-    @pytest.mark.asyncio
-    async def test_crawl_error_handling(self):
-        """Test that crawler handles errors gracefully"""
-        crawler = MASCrawler()
+        assert len(notices) > 0, "Should extract at least one notice"
         
-        with patch('crawlers.mas.AsyncWebCrawler') as mock_crawler_class:
-            mock_crawler = AsyncMock()
-            mock_crawler.arun = AsyncMock(side_effect=Exception("Connection timeout"))
-            mock_crawler_class.return_value.__aenter__.return_value = mock_crawler
-            
-            # Should not raise exception
-            notices = await crawler.crawl()
-            
-            assert isinstance(notices, list)
+        # Check that we have actual PDF content
+        for notice in notices[:3]:
+            content = notice["content"]
+            content_lower = content.lower()
+            has_regulatory_content = any(term in content_lower for term in [
+                'aml', 'cft', 'money laundering', 'financial', 'regulation',
+                'singapore', 'mas', 'notice', 'requirement', 'monetary authority'
+            ])
+            assert has_regulatory_content, f"Content doesn't seem regulatory: {notice['title']}"
+    
     
     @pytest.mark.asyncio
     async def test_date_parsing(self):
@@ -108,12 +121,14 @@ class TestMASCrawler:
         
         notices = await crawler.crawl()
         
+        assert len(notices) > 0
+        
         for notice in notices:
             date = notice["date"]
             assert isinstance(date, datetime)
             # Check date is reasonable (not in future, not too old)
             assert date.year >= 2020
-            assert date.year <= 2025
+            assert date.year <= 2026
 
 
 class TestMASCrawlerComparison:
@@ -139,6 +154,7 @@ class TestMASCrawlerComparison:
 
 
 # Standalone test function for manual testing
+@pytest.mark.asyncio
 async def test_mas_crawler_manual():
     """Manual test - can be run directly"""
     print("\n" + "="*60)

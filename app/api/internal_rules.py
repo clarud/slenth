@@ -5,9 +5,12 @@ Endpoints for managing internal compliance rules.
 """
 
 import logging
+import os
+import json
+from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.schemas.rule import (
@@ -21,6 +24,7 @@ from db.models import InternalRule
 from services.audit import AuditService
 from services.embeddings import EmbeddingService
 from services.vector_db import VectorDBService
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -285,3 +289,219 @@ async def deactivate_internal_rule(
     )
 
     return None
+
+
+@router.post("/upload", status_code=status.HTTP_201_CREATED)
+async def upload_internal_rules_document(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Upload internal rules document (JSON format) and batch ingest to PostgreSQL + Pinecone.
+    
+    Expected JSON format:
+    {
+        "rules": [
+            {
+                "title": "Rule Title",
+                "description": "Rule description",
+                "text": "Full rule text",
+                "section": "Section name",
+                "obligation_type": "mandatory",
+                "conditions": ["condition1", "condition2"],
+                "expected_evidence": ["evidence1"],
+                "penalty_level": "high",
+                "effective_date": "2024-01-01",
+                "version": "v1.0",
+                "source": "internal_policy_manual"
+            }
+        ]
+    }
+    
+    Args:
+        file: JSON file with rules array
+        db: Database session
+        
+    Returns:
+        Success message with ingestion stats
+    """
+    filename = file.filename
+    logger.info(f"Uploading internal rules document: {filename}")
+
+    try:
+        # Validate file type
+        if not filename.endswith('.json'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only JSON files are supported"
+            )
+
+        # Read and parse JSON
+        content = await file.read()
+        try:
+            rules_data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid JSON format: {str(e)}"
+            )
+
+        # Validate structure
+        if "rules" not in rules_data or not isinstance(rules_data["rules"], list):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="JSON must contain 'rules' array"
+            )
+
+        rules = rules_data["rules"]
+        if not rules:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rules array cannot be empty"
+            )
+
+        # Initialize services
+        embedding_service = EmbeddingService()
+        vector_service = VectorDBService()
+        audit_service = AuditService(db)
+
+        created_count = 0
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+
+        # Process each rule
+        for idx, rule_data in enumerate(rules):
+            try:
+                # Validate required fields
+                required_fields = ["title", "text", "effective_date"]
+                missing_fields = [f for f in required_fields if f not in rule_data]
+                if missing_fields:
+                    errors.append(f"Rule {idx}: Missing required fields: {missing_fields}")
+                    skipped_count += 1
+                    continue
+
+                title = rule_data["title"]
+                text = rule_data["text"]
+                
+                # Check if rule already exists (by title)
+                existing = db.query(InternalRule).filter(
+                    InternalRule.title == title
+                ).first()
+
+                if existing:
+                    # Update existing rule
+                    existing.description = rule_data.get("description", existing.description)
+                    existing.text = text
+                    existing.section = rule_data.get("section", existing.section)
+                    existing.obligation_type = rule_data.get("obligation_type", existing.obligation_type)
+                    existing.conditions = rule_data.get("conditions", existing.conditions)
+                    existing.expected_evidence = rule_data.get("expected_evidence", existing.expected_evidence)
+                    existing.penalty_level = rule_data.get("penalty_level", existing.penalty_level)
+                    existing.effective_date = rule_data.get("effective_date", existing.effective_date)
+                    existing.sunset_date = rule_data.get("sunset_date", existing.sunset_date)
+                    existing.version = rule_data.get("version", existing.version)
+                    existing.source = rule_data.get("source", existing.source)
+                    existing.metadata = rule_data.get("metadata", existing.metadata)
+                    existing.updated_at = datetime.utcnow()
+                    
+                    db.commit()
+                    db.refresh(existing)
+                    
+                    rule_id = existing.rule_id
+                    updated_count += 1
+                    logger.info(f"Updated rule: {title}")
+                else:
+                    # Create new rule
+                    db_rule = InternalRule(
+                        title=title,
+                        description=rule_data.get("description", ""),
+                        text=text,
+                        section=rule_data.get("section"),
+                        obligation_type=rule_data.get("obligation_type"),
+                        conditions=rule_data.get("conditions", []),
+                        expected_evidence=rule_data.get("expected_evidence", []),
+                        penalty_level=rule_data.get("penalty_level"),
+                        effective_date=rule_data.get("effective_date"),
+                        sunset_date=rule_data.get("sunset_date"),
+                        version=rule_data.get("version", "v1.0"),
+                        source=rule_data.get("source", "internal_policy_manual"),
+                        metadata=rule_data.get("metadata", {}),
+                    )
+                    db.add(db_rule)
+                    db.commit()
+                    db.refresh(db_rule)
+                    
+                    rule_id = db_rule.rule_id
+                    created_count += 1
+                    logger.info(f"Created rule: {title}")
+
+                # Embed in vector DB
+                try:
+                    embedding = embedding_service.embed_text(text)
+                    vector_service.upsert_vectors(
+                        collection_name="internal_rules",
+                        texts=[text],
+                        vectors=[embedding],
+                        metadata=[
+                            {
+                                "rule_id": rule_id,
+                                "title": title,
+                                "section": rule_data.get("section", ""),
+                                "effective_date": rule_data.get("effective_date", ""),
+                                "version": rule_data.get("version", "v1.0"),
+                                "is_active": True,
+                            }
+                        ],
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to embed rule '{title}': {e}")
+                    # Continue - rule is still saved in database
+
+            except Exception as e:
+                errors.append(f"Rule {idx} ('{rule_data.get('title', 'Unknown')}'): {str(e)}")
+                skipped_count += 1
+                logger.error(f"Error processing rule {idx}: {e}")
+                db.rollback()
+                continue
+
+        # Log audit trail
+        audit_service.log_action(
+            action_type="UPLOAD_INTERNAL_RULES",
+            entity_type="internal_rules",
+            entity_id=filename,
+            user_id="system",
+            details={
+                "filename": filename,
+                "total_rules": len(rules),
+                "created": created_count,
+                "updated": updated_count,
+                "skipped": skipped_count,
+                "errors": errors[:10],  # Limit error messages
+            },
+        )
+
+        logger.info(
+            f"Internal rules upload complete: {created_count} created, "
+            f"{updated_count} updated, {skipped_count} skipped"
+        )
+
+        return {
+            "message": "Internal rules uploaded successfully",
+            "filename": filename,
+            "total_rules": len(rules),
+            "created": created_count,
+            "updated": updated_count,
+            "skipped": skipped_count,
+            "errors": errors if errors else None,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading internal rules: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading internal rules: {str(e)}",
+        )

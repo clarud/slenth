@@ -12,11 +12,26 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# Resolve broker/backend URLs as plain strings (Celery/Kombu expect str)
+broker_url = None
+backend_url = None
+
+# Prefer dedicated CELERY_* settings when available, else fall back to REDIS_URL
+try:
+    broker_url = str(getattr(settings, "celery_broker_url", None) or settings.redis_url)
+except Exception:
+    broker_url = str(settings.redis_url)
+
+try:
+    backend_url = str(getattr(settings, "celery_result_backend", None) or settings.redis_url)
+except Exception:
+    backend_url = str(settings.redis_url)
+
 # Create Celery app
 celery_app = Celery(
     "slenth_aml",
-    broker=settings.redis_url,
-    backend=settings.redis_url,
+    broker=broker_url,
+    backend=backend_url,
 )
 
 # Configure Celery

@@ -5,6 +5,7 @@ Loads environment variables and provides typed configuration objects.
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from pydantic import Field, PostgresDsn, RedisDsn, field_validator
+from pathlib import Path
 from typing import List, Optional, Any
 import os
 
@@ -50,33 +51,27 @@ class Settings(BaseSettings):
     celery_result_backend: RedisDsn = Field(..., env="CELERY_RESULT_BACKEND")
     celery_worker_concurrency: int = Field(default=4, env="CELERY_WORKER_CONCURRENCY")
     
-    # Qdrant
-    qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
-    qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
-    qdrant_api_key: Optional[str] = Field(default=None, env="QDRANT_API_KEY")
-    qdrant_collection_external_rules: str = Field(
-        default="external_rules",
-        env="QDRANT_COLLECTION_EXTERNAL_RULES"
-    )
-    qdrant_collection_internal_rules: str = Field(
-        default="internal_rules",
-        env="QDRANT_COLLECTION_INTERNAL_RULES"
-    )
+    # Pinecone (for vector storage)
+    pinecone_api_key: str = Field(..., env="PINECONE_API_KEY")
+    pinecone_internal_index_host: str = Field(..., env="PINECONE_INTERNAL_INDEX_HOST")
+    pinecone_external_index_host: str = Field(..., env="PINECONE_EXTERNAL_INDEX_HOST")
+
+    # Vector DB provider selection (default to pinecone)
+    vector_db_provider: str = Field(default="pinecone", env="VECTOR_DB_PROVIDER")
     
-    # LLM
-    llm_provider: str = Field(default="groq", env="LLM_PROVIDER")  # openai, anthropic, or groq
-    
-    openai_api_key: str = Field(..., env="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4-turbo-preview", env="OPENAI_MODEL")
-    openai_temperature: float = Field(default=0.0, env="OPENAI_TEMPERATURE")
     
     anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
     anthropic_model: str = Field(default="claude-3-opus-20240229", env="ANTHROPIC_MODEL")
+
+    # Unified LLM selector used by services/llm.py (prefer Groq)
+    llm_provider: str = Field(default="groq", env="LLM_PROVIDER")
+    llm_model: str = Field(default="llama3-70b-8192", env="LLM_MODEL")
     
     groq_api_key: Optional[str] = Field(default=None, env="GROQ_API_KEY")
     groq_model: str = Field(default="llama-3.3-70b-versatile", env="GROQ_MODEL")
     
     # Embeddings
+    embeddings_provider: str = Field(default="openai", env="EMBEDDINGS_PROVIDER")
     embedding_model: str = Field(default="text-embedding-3-large", env="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=3072, env="EMBEDDING_DIMENSION")
     embedding_batch_size: int = Field(default=100, env="EMBEDDING_BATCH_SIZE")
@@ -191,6 +186,12 @@ class Settings(BaseSettings):
     enable_tracing: bool = Field(default=False, env="ENABLE_TRACING")
     metrics_port: int = Field(default=9090, env="METRICS_PORT")
     flower_port: int = Field(default=5555, env="FLOWER_PORT")
+    
+    class Config:
+        # Resolve .env relative to this file so it works regardless of CWD
+        env_file = str(Path(__file__).with_name(".env"))
+        env_file_encoding = "utf-8"
+        case_sensitive = False
 
 
 # Global settings instance

@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.schemas.transaction import (
@@ -21,7 +22,7 @@ from app.schemas.transaction import (
     TransactionStatusResponse,
 )
 from db.database import get_db
-from db.models import Transaction, ComplianceAnalysis
+from db.models import Transaction, ComplianceAnalysis, AuditLog
 from services.audit import AuditService
 from worker.tasks import process_transaction
 
@@ -53,26 +54,89 @@ async def submit_transaction(
     logger.info(f"Submitting transaction {transaction_id} for processing")
 
     try:
-        # Store transaction in database
+        # Idempotency: if this transaction_id already exists, return its task info
+        existing = (
+            db.query(Transaction)
+            .filter(Transaction.transaction_id == transaction_id)
+            .first()
+        )
+        if existing:
+            existing_task_id = (existing.raw_data or {}).get("task_id")
+
+            # If the prior record is missing a task_id (from older runs), enqueue now and backfill.
+            if not existing_task_id:
+                try:
+                    encoded_request = jsonable_encoder(transaction)
+                    task = process_transaction.delay(encoded_request)
+                    data = existing.raw_data or {}
+                    data["task_id"] = task.id
+                    existing.raw_data = data
+                    db.add(existing)
+                    db.commit()
+                    existing_task_id = task.id
+                except Exception:
+                    db.rollback()
+
+            return TransactionResponse(
+                transaction_id=transaction_id,
+                task_id=existing_task_id or "unknown",
+                status="queued" if existing_task_id else "unknown",
+                message="Transaction already exists",
+                submitted_at=existing.created_at,
+            )
+
+        # Map request schema to DB model fields only (avoid invalid kwargs)
+        # Derivations:
+        # - pep_indicator from customer_is_pep
+        # - sanctions_hit from sanctions_screening string
+        # - customer_segment from customer_type
+        sanctions_str = (transaction.sanctions_screening or "").strip().lower() if hasattr(transaction, "sanctions_screening") else ""
+        sanctions_hit = sanctions_str in {"hit", "positive", "match", "true", "yes"}
+
+        # Encode request body into JSON-serializable form (convert datetimes, etc.)
+        encoded_request = jsonable_encoder(transaction)
+
         db_transaction = Transaction(
             transaction_id=transaction_id,
+            booking_jurisdiction=transaction.booking_jurisdiction,
+            regulator=transaction.regulator,
             booking_datetime=transaction.booking_datetime,
-            customer_id=transaction.customer_id,
+            value_date=transaction.value_date,
             amount=transaction.amount,
             currency=transaction.currency,
-            originator_country=transaction.originator_country,
-            beneficiary_country=transaction.beneficiary_country,
-            product_type=transaction.product_type,
             channel=transaction.channel,
+            product_type=transaction.product_type,
+            originator_name=transaction.originator_name,
+            originator_account=transaction.originator_account,
+            originator_country=transaction.originator_country,
+            beneficiary_name=transaction.beneficiary_name,
+            beneficiary_account=transaction.beneficiary_account,
+            beneficiary_country=transaction.beneficiary_country,
+            swift_mt=transaction.swift_mt,
+            ordering_institution_bic=getattr(transaction, "ordering_institution_bic", None),
+            beneficiary_institution_bic=getattr(transaction, "beneficiary_institution_bic", None),
+            swift_f50_present=getattr(transaction, "swift_f50_present", False),
+            swift_f59_present=getattr(transaction, "swift_f59_present", False),
+            swift_f70_purpose=getattr(transaction, "swift_f70_purpose", None),
+            swift_f71_charges=getattr(transaction, "swift_f71_charges", None),
+            pep_indicator=getattr(transaction, "customer_is_pep", False),
+            sanctions_hit=sanctions_hit,
+            customer_id=transaction.customer_id,
+            customer_segment=getattr(transaction, "customer_type", None),
             customer_risk_rating=transaction.customer_risk_rating,
-            sanctions_screening=transaction.sanctions_screening,
-            raw_json=transaction.dict(),
+            raw_data=encoded_request,
         )
         db.add(db_transaction)
-        db.commit()
+        db.flush()  # get PK without committing
 
         # Enqueue task to Celery
-        task = process_transaction.delay(transaction.dict())
+        task = process_transaction.delay(encoded_request)
+
+        # Persist task_id into the same transaction before commit
+        data = db_transaction.raw_data or {}
+        data["task_id"] = task.id
+        db_transaction.raw_data = data
+        db.commit()
 
         # Log audit trail
         audit_service = AuditService(db)
@@ -134,7 +198,32 @@ async def get_transaction_status(
     # Get task ID from audit log or transaction metadata
     # For simplicity, we'll need to track task_id in transaction record
     # This is a simplified version
-    task_id = transaction.raw_json.get("task_id") if transaction.raw_json else None
+    # task_id is stored inside Transaction.raw_data
+    task_id = (transaction.raw_data or {}).get("task_id")
+
+    if not task_id:
+        # Fallback: retrieve task_id from audit logs if raw_data missing it
+        audit = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.action_type == "SUBMIT_TRANSACTION",
+                AuditLog.target_type == "transaction",
+                AuditLog.target_id == transaction_id,
+            )
+            .order_by(AuditLog.timestamp.desc())
+            .first()
+        )
+        if audit and audit.context_data and audit.context_data.get("task_id"):
+            task_id = audit.context_data.get("task_id")
+            # Backfill into transaction.raw_data for future lookups
+            try:
+                data = transaction.raw_data or {}
+                data["task_id"] = task_id
+                transaction.raw_data = data
+                db.add(transaction)
+                db.commit()
+            except Exception:
+                db.rollback()
 
     if not task_id:
         return TransactionStatusResponse(

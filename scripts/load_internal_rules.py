@@ -78,7 +78,7 @@ def load_internal_rules():
                         is_active=rule_data.get('is_active', True),
                         source=rule_data.get('source', 'internal_policy_manual'),
                         policy_reference=rule_data.get('policy_reference'),
-                        metadata=rule_data.get('metadata', {}),
+                        meta=rule_data.get('metadata', {}),
                         created_by='system',
                         approved_by=rule_data.get('approved_by', 'admin'),
                     )

@@ -1,6 +1,121 @@
 # Crawler Tests
 
-This directory contains comprehensive tests for regulatory circular crawlers.
+# Crawler Tests
+
+This directory contains tests for the regulatory crawler modules that extract AML/CFT circulars from three financial regulatory authorities.
+
+## Overview
+
+The crawlers use a **two-layer crawling approach**:
+1. **Layer 1**: Discover links to detail pages from the main regulatory page
+2. **Layer 2**: Extract PDF links from detail pages and parse PDF content
+
+### Crawlers
+
+1. **FINMA (Switzerland)** - `crawlers/finma.py`
+   - Single-layer: Main page → Direct PDF links
+   - Extracts Swiss financial circulars
+   
+2. **HKMA (Hong Kong)** - `crawlers/hkma.py`
+   - Two-layer: Main page → Detail pages → PDF links
+   - Extracts Hong Kong monetary authority guidelines
+   
+3. **MAS (Singapore)** - `crawlers/mas.py`
+   - Two-layer: Main page → Detail pages → PDF links
+   - Extracts Singapore regulatory notices
+
+## Running Tests
+
+### Run All Tests
+```bash
+pytest tests/crawlers/ -v
+```
+
+### Run Specific Crawler Tests
+```bash
+pytest tests/crawlers/test_finma.py -v
+pytest tests/crawlers/test_hkma.py -v
+pytest tests/crawlers/test_mas.py -v
+```
+
+### Run Integration Tests Only
+```bash
+pytest tests/crawlers/test_all_crawlers.py -v
+```
+
+### Run with Output
+```bash
+pytest tests/crawlers/ -v -s  # Shows print statements
+```
+
+## Test Output
+
+All crawled data is saved to `tests/crawlers/output/` as JSONL files:
+- `finma.jsonl` - FINMA circulars
+- `hkma.jsonl` - HKMA guidelines
+- `mas.jsonl` - MAS notices
+
+Each line contains:
+```json
+{
+  "title": "Circular Title",
+  "url": "https://...",
+  "date": "2024-01-15 00:00:00",
+  "content": "Extracted PDF content...",
+  "source": "FINMA|HKMA|MAS",
+  "jurisdiction": "CH|HK|SG",
+  "rule_type": "circular|guideline|notice"
+}
+```
+
+## Test Structure
+
+### Unit Tests
+- `test_finma.py` - FINMA crawler tests
+- `test_hkma.py` - HKMA crawler tests  
+- `test_mas.py` - MAS crawler tests
+
+### Integration Tests
+- `test_all_crawlers.py` - Tests all crawlers together
+- Validates consistent output format
+- Checks PDF content quality
+- Saves comprehensive output
+
+### Fixtures
+- `conftest.py` - Shared test fixtures:
+  - `output_dir` - Output directory fixture
+  - `file_saver` - Helper to save JSONL output
+  - `clean_output_files` - Cleans output before tests
+
+## What Tests Verify
+
+1. **Structure**: All required fields present
+2. **Content**: PDF content properly extracted
+3. **Quality**: Content has regulatory keywords
+4. **Dates**: Proper date parsing
+5. **Two-Layer**: Detail pages → PDFs workflow
+6. **Output**: Results saved to JSONL files
+
+## Requirements
+
+The crawlers require:
+- `crawl4ai` - Web crawling library
+- PDF extraction capabilities
+- Internet connection (tests hit live URLs)
+
+## Troubleshooting
+
+### Tests Fail with ImportError
+Install crawl4ai:
+```bash
+pip install crawl4ai
+```
+
+### Tests Timeout
+Increase timeout or reduce number of documents crawled (adjust limits in crawler code)
+
+### Empty Output Files
+Check internet connection and verify regulatory URLs are accessible
 
 ## Test Structure
 

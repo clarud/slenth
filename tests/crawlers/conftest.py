@@ -2,107 +2,71 @@
 Test configuration and fixtures for crawler tests.
 """
 
+import json
+import os
+import sys
+from pathlib import Path
+
 import pytest
 from unittest.mock import Mock, AsyncMock
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
 
-from db.database import Base
-
-
-@pytest.fixture
-def mock_db_session():
-    """Create a mock database session for testing"""
-    # Use in-memory SQLite for testing
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    
-    TestingSessionLocal = sessionmaker(bind=engine)
-    session = TestingSessionLocal()
-    
-    yield session
-    
-    session.close()
+# Ensure project root is on sys.path so `import crawlers` works when running tests directly
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 
-@pytest.fixture
-def mock_embedding_service():
-    """Mock embedding service"""
-    mock = Mock()
-    mock.embed_text = Mock(return_value=[0.1] * 1536)  # OpenAI embedding size
-    mock.embed_batch = Mock(return_value=[[0.1] * 1536])
-    return mock
+@pytest.fixture(scope="session")
+def output_dir() -> Path:
+    """Directory to store crawler outputs for inspection during tests."""
+    out = Path("tests/crawlers/output")
+    out.mkdir(parents=True, exist_ok=True)
+    return out
 
 
-@pytest.fixture
-def mock_vector_db():
-    """Mock vector database service"""
-    mock = Mock()
-    mock.upsert_vectors = Mock(return_value=True)
-    mock.hybrid_search = AsyncMock(return_value=[])
-    return mock
+@pytest.fixture(scope="function")
+def clean_output_files(output_dir):
+    """Clean output files before each test to avoid duplicate data."""
+    for file in output_dir.glob("*.jsonl"):
+        file.unlink()
+    yield
+    # Keep files after test for inspection
 
 
-@pytest.fixture
-def sample_hkma_html():
-    """Sample HKMA HTML page for testing"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head><title>HKMA Circulars</title></head>
-    <body>
-        <div class="circular-list">
-            <div class="circular-item">
-                <h3><a href="/circular/2024/aml-cdd-guidelines">Customer Due Diligence Guidelines</a></h3>
-                <span class="date">15 January 2024</span>
-                <p class="summary">Updated guidelines on customer due diligence for AML compliance...</p>
-            </div>
-            <div class="circular-item">
-                <h3><a href="/circular/2024/str-reporting">Suspicious Transaction Reporting</a></h3>
-                <span class="date">20 March 2024</span>
-                <p class="summary">Requirements for suspicious transaction reporting...</p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+class _FileSaver:
+    """Helper to save items to a JSONL file with basic duplicate handling."""
+
+    def __init__(self, output_dir: Path):
+        self._seen = set()
+        self._output_dir = output_dir
+
+    def save(self, items, filename: str):
+        """Save items to output directory with given filename."""
+        path = self._output_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        saved = 0
+        with path.open("a", encoding="utf-8") as f:
+            for it in items:
+                key = (it.get("source"), it.get("title"), it.get("url"))
+                if key in self._seen:
+                    continue
+                self._seen.add(key)
+                # Create a clean dict with proper formatting
+                output_item = {
+                    "title": it.get("title", ""),
+                    "url": it.get("url", ""),
+                    "date": str(it.get("date", "")),
+                    "content": it.get("content", "")[:500] + "..." if len(it.get("content", "")) > 500 else it.get("content", ""),
+                    "source": it.get("source", ""),
+                    "jurisdiction": it.get("jurisdiction", ""),
+                    "rule_type": it.get("rule_type", ""),
+                }
+                f.write(json.dumps(output_item, default=str, ensure_ascii=False) + "\n")
+                saved += 1
+        return saved
 
 
-@pytest.fixture
-def sample_mas_html():
-    """Sample MAS HTML page for testing"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head><title>MAS Notices</title></head>
-    <body>
-        <div class="notice-list">
-            <article class="notice">
-                <h2><a href="/notice/PSN02-AML">Prevention of Money Laundering</a></h2>
-                <time datetime="2024-02-01">1 February 2024</time>
-                <div class="content">Notice on prevention of money laundering and countering financing of terrorism...</div>
-            </article>
-        </div>
-    </body>
-    </html>
-    """
-
-
-@pytest.fixture
-def sample_finma_html():
-    """Sample FINMA HTML page for testing"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head><title>FINMA Circulars</title></head>
-    <body>
-        <div class="circulars">
-            <div class="circular">
-                <a href="/circular/2024-01-aml" class="title">Anti-Money Laundering Circular 2024/1</a>
-                <span class="date">20.01.2024</span>
-                <div class="abstract">This circular sets out requirements for anti-money laundering compliance...</div>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+@pytest.fixture(scope="function")
+def file_saver(output_dir) -> _FileSaver:
+    """Function-scoped file saver for each test."""
+    return _FileSaver(output_dir)

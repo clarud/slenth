@@ -132,3 +132,72 @@ class InternalRuleListResponse(BaseModel):
                 "page_size": 100,
             }
         }
+
+
+class RuleItem(BaseModel):
+    """Unified rule item for both internal and external rules."""
+
+    rule_id: str
+    rule_type: str = Field(..., description="Type: 'internal' or 'external'")
+    title: str
+    description: Optional[str]
+    text: str = Field(..., description="Rule text (truncated for list view)")
+    section: Optional[str]
+    regulator: Optional[str] = Field(None, description="For external rules: HKMA, MAS, FINMA")
+    jurisdiction: Optional[str] = Field(None, description="For external rules: HK, SG, CH")
+    source: Optional[str]
+    effective_date: Optional[datetime]
+    version: Optional[str]
+    is_active: bool
+    created_at: datetime
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "rule_id": "HKMA-3f8a7b2c9d1e",
+                "rule_type": "external",
+                "title": "AML/CFT Guidance Paper",
+                "description": "Anti-Money Laundering and Counter-Terrorist Financing",
+                "text": "Banks should implement risk-based approach...",
+                "section": "Section 3.2",
+                "regulator": "HKMA",
+                "jurisdiction": "HK",
+                "source": "https://www.hkma.gov.hk/...",
+                "effective_date": "2024-01-01T00:00:00Z",
+                "version": None,
+                "is_active": True,
+                "created_at": "2024-11-02T00:00:00Z",
+                "metadata": {"published_date": "2024-01-01", "chunk_index": 0}
+            }
+        }
+
+
+class UnifiedRulesResponse(BaseModel):
+    """Response schema for unified rules (internal + external)."""
+
+    total: int = Field(..., description="Total number of rules")
+    internal_count: int = Field(..., description="Number of internal rules")
+    external_count: int = Field(..., description="Number of external rules")
+    rules: List[RuleItem]
+    page: int = 1
+    page_size: int = 100
+    filters_applied: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total": 156,
+                "internal_count": 45,
+                "external_count": 111,
+                "rules": [],
+                "page": 1,
+                "page_size": 100,
+                "filters_applied": {
+                    "regulator": "HKMA",
+                    "jurisdiction": None,
+                    "section": None,
+                    "is_active": True,
+                }
+            }
+        }
