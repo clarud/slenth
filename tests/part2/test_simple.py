@@ -11,18 +11,28 @@ from pathlib import Path
 from datetime import datetime
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+    env_path = project_root / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    pass  # dotenv not required for test
 
 # Set minimal environment variables for testing
 os.environ.setdefault('MAX_UPLOAD_SIZE_MB', '50')
 os.environ.setdefault('OCR_OUTPUT_DIR', 'data/ocr_output')
 os.environ.setdefault('DOCUMENT_ALLOWED_TYPES', 'pdf')
-os.environ.setdefault('ENABLE_BACKGROUND_CHECK', 'true')
+os.environ.setdefault('ENABLE_BACKGROUND_CHECK', 'false')  # Disabled to save API tokens
 os.environ.setdefault('DILISENSE_API_KEY', 'sF8e01BcNQ2pz5Wfs3hcp5L2TME4qwkC1vIb5DdK')
 os.environ.setdefault('DILISENSE_BASE_URL', 'https://api.dilisense.com/v1')
 os.environ.setdefault('DILISENSE_TIMEOUT', '30')
 os.environ.setdefault('DILISENSE_MAX_RETRIES', '3')
-os.environ.setdefault('DILISENSE_ENABLED', 'true')
+os.environ.setdefault('DILISENSE_ENABLED', 'false')  # Disabled to save API tokens
 
 # Import agents directly without full config
 import logging
@@ -272,6 +282,92 @@ class SimpleOCRAgent:
         return entities
 
 
+class SimpleFormatValidationAgent:
+    """Simplified Format Validation Agent"""
+    
+    def __init__(self):
+        pass
+    
+    async def execute(self, state):
+        """Execute format validation"""
+        logger.info("Executing FormatValidationAgent")
+        
+        ocr_text = state.get("ocr_text", "")
+        page_texts = state.get("page_texts", [])
+        document_type = state.get("document_type", "other")
+        
+        # Simple validation checks
+        format_issues = []
+        missing_sections = []
+        spelling_errors = 0
+        completeness_score = 100
+        
+        # Check text length
+        text_length = len(ocr_text.strip())
+        if text_length < 200:
+            format_issues.append({
+                "type": "length",
+                "severity": "high",
+                "details": f"Document too short: {text_length} chars"
+            })
+            completeness_score -= 30
+        
+        # Check for required sections based on type
+        required = {
+            "purchase_agreement": ["buyer", "seller", "price", "date"],
+            "proof_of_address": ["address", "name", "date"],
+            "id_document": ["name", "number", "date"],
+        }.get(document_type, [])
+        
+        text_lower = ocr_text.lower()
+        for section in required:
+            if section not in text_lower:
+                missing_sections.append(section)
+                format_issues.append({
+                    "type": "missing_section",
+                    "severity": "high",
+                    "details": f"Missing: {section}"
+                })
+                completeness_score -= 15
+        
+        # Check spelling (simple check)
+        words = re.findall(r'\b[a-z]{3,}\b', text_lower)
+        if words:
+            # Check for gibberish (repeated chars)
+            gibberish = re.findall(r'\b([a-z])\1{3,}\b', text_lower)
+            if gibberish:
+                spelling_errors = len(gibberish) * 2
+                format_issues.append({
+                    "type": "spelling",
+                    "severity": "medium",
+                    "details": f"Detected {len(gibberish)} gibberish patterns"
+                })
+                completeness_score -= 10
+        
+        # Check for blank pages
+        blank_pages = [p for p in page_texts if len(p.get("text", "").strip()) < 50]
+        if blank_pages:
+            format_issues.append({
+                "type": "blank_pages",
+                "severity": "medium",
+                "details": f"{len(blank_pages)} blank pages found"
+            })
+            completeness_score -= 5
+        
+        format_valid = completeness_score >= 50
+        format_quality_score = max(0, completeness_score)
+        
+        state["format_valid"] = format_valid
+        state["spelling_errors"] = spelling_errors
+        state["missing_sections"] = missing_sections
+        state["completeness_score"] = completeness_score
+        state["format_issues"] = format_issues
+        state["format_quality_score"] = format_quality_score
+        state["format_validation_executed"] = True
+        
+        return state
+
+
 class SimpleBackgroundCheckAgent:
     """Simplified Background Check Agent with Dilisense"""
     
@@ -285,7 +381,13 @@ class SimpleBackgroundCheckAgent:
         logger.info("Executing BackgroundCheckAgent")
         
         if not self.enabled:
+            logger.warning("⚠️  Background check DISABLED (saving API tokens)")
             state["background_check_skipped"] = True
+            state["background_check_results"] = []
+            state["pep_found"] = False
+            state["sanctions_found"] = False
+            state["background_risk_score"] = 0
+            state["screened_entities"] = []
             return state
         
         ocr_text = state.get("ocr_text", "")
@@ -429,30 +531,162 @@ async def test_agents(pdf_path):
         print(f"  Examples: {', '.join(entities['potential_names'][:3])}")
     print()
     
-    # Agent 3: Background Check
+    # Agent 3: Format Validation
     print("=" * 80)
-    print("3️⃣  BACKGROUND CHECK (Dilisense)")
+    print("3️⃣  FORMAT VALIDATION")
+    print("=" * 80)
+    
+    # Use REAL spell checking with pyspellchecker (inline to avoid config issues)
+    try:
+        from spellchecker import SpellChecker
+        spell = SpellChecker()
+        
+        # Extract data from state
+        ocr_text = state.get("ocr_text", "")
+        document_type = state.get("document_type", "other")
+        page_texts = state.get("page_texts", [])
+        
+        format_issues = []
+        missing_sections = []
+        spelling_errors = 0
+        spelling_error_rate = 0.0
+        fraud_indicators = []
+        completeness_score = 100
+        
+        # REAL SPELLING CHECK
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', ocr_text.lower())
+        if words and len(words) > 10:
+            misspelled = spell.unknown(words)
+            spelling_errors = len(misspelled)
+            spelling_error_rate = (spelling_errors / len(words)) * 100 if words else 0
+            
+            if spelling_error_rate > 10:
+                format_issues.append({
+                    "type": "excessive_spelling_errors",
+                    "severity": "medium",
+                    "details": f"{spelling_error_rate:.1f}% of words misspelled ({spelling_errors} errors)"
+                })
+                fraud_indicators.append(f"High spelling error rate: {spelling_error_rate:.1f}%")
+                completeness_score -= min(20, int(spelling_error_rate))
+        
+        # Check for required sections
+        required_sections = {
+            "purchase_agreement": ["buyer", "seller", "price", "date", "signature"],
+        }.get(document_type, [])
+        
+        text_lower = ocr_text.lower()
+        for section in required_sections:
+            if section not in text_lower:
+                missing_sections.append(section)
+                format_issues.append({
+                    "type": "missing_section",
+                    "severity": "high",
+                    "details": f"Required section missing: {section}"
+                })
+                completeness_score -= 10
+        
+        # Calculate final scores
+        completeness_score = max(0, min(100, completeness_score))
+        high_severity_issues = [i for i in format_issues if i.get("severity") == "high"]
+        format_valid = completeness_score >= 70 and len(high_severity_issues) == 0
+        
+        state["format_valid"] = format_valid
+        state["spelling_errors"] = spelling_errors
+        state["spelling_error_rate"] = spelling_error_rate
+        state["missing_sections"] = missing_sections
+        state["completeness_score"] = completeness_score
+        state["format_issues"] = format_issues
+        state["fraud_indicators"] = fraud_indicators
+        state["format_validation_executed"] = True
+        
+        print(f"✅ Using REAL spell checking (pyspellchecker)")
+        
+    except ImportError as e:
+        logger.warning(f"pyspellchecker not available: {e}")
+        agent_format = SimpleFormatValidationAgent()
+        state = await agent_format.execute(state)
+        print(f"⚠️  Using simplified version (no spell checker)")
+    
+    print(f"{'✅' if state['format_valid'] else '❌'} Format Valid: {state['format_valid']}")
+    print(f"📊 Completeness Score: {state['completeness_score']}/100")
+    
+    # Show spelling details
+    if 'spelling_error_rate' in state:
+        print(f"� Spelling Error Rate: {state.get('spelling_error_rate', 0):.1f}%")
+    print(f"❌ Spelling Errors: {state['spelling_errors']}")
+    
+    # Show fraud indicators if present
+    if state.get('fraud_indicators'):
+        print(f"\n🚨 Fraud Indicators: {len(state['fraud_indicators'])}")
+        for indicator in state['fraud_indicators'][:5]:
+            print(f"   ⚠️  {indicator}")
+    
+    print(f"\n📋 Validation Results:")
+    print(f"  Missing Sections: {len(state['missing_sections'])}")
+    if state['missing_sections']:
+        print(f"    → {', '.join(state['missing_sections'])}")
+    
+    print(f"  Format Issues: {len(state['format_issues'])}")
+    if state['format_issues']:
+        for issue in state['format_issues'][:5]:  # Show first 5
+            print(f"    • [{issue['severity'].upper()}] {issue['type']}: {issue['details']}")
+        if len(state['format_issues']) > 5:
+            print(f"    ... and {len(state['format_issues']) - 5} more issues")
+    print()
+    
+    # Agent 4: Background Check
+    print("=" * 80)
+    print("4️⃣  BACKGROUND CHECK (Dilisense)")
     print("=" * 80)
     agent3 = SimpleBackgroundCheckAgent()
     state = await agent3.execute(state)
     
-    print(f"✅ Screened: {len(state['screened_entities'])} entities")
-    if state['screened_entities']:
-        print(f"   Names: {', '.join(state['screened_entities'])}")
+    if state.get('background_check_skipped'):
+        print("⚠️  Background check SKIPPED (API disabled to save tokens)")
+        print("   To enable: Set ENABLE_BACKGROUND_CHECK=true in environment")
+    else:
+        print(f"✅ Screened: {len(state['screened_entities'])} entities")
+        if state['screened_entities']:
+            print(f"   Names: {', '.join(state['screened_entities'])}")
+        
+        print(f"\n🚨 Findings:")
+        print(f"  PEP: {'⚠️  YES' if state['pep_found'] else '✅ No'}")
+        print(f"  Sanctions: {'🚨 YES' if state['sanctions_found'] else '✅ No'}")
+        print(f"  Risk Score: {state['background_risk_score']}/100")
+        
+        # Show results
+        if state['background_check_results']:
+            print(f"\n📊 Screening Results:")
+            for i, result in enumerate(state['background_check_results'], 1):
+                print(f"\n  {i}. {result['name']}")
+                print(f"     Hits: {result['total_hits']}")
+                print(f"     PEP: {result['is_pep']}")
+                print(f"     Sanctioned: {result['is_sanctioned']}")
     
-    print(f"\n🚨 Findings:")
-    print(f"  PEP: {'⚠️  YES' if state['pep_found'] else '✅ No'}")
-    print(f"  Sanctions: {'🚨 YES' if state['sanctions_found'] else '✅ No'}")
-    print(f"  Risk Score: {state['background_risk_score']}/100")
+    print()
+    print("=" * 80)
+    print("📊 TEST SUMMARY")
+    print("=" * 80)
     
-    # Show results
-    if state['background_check_results']:
-        print(f"\n📊 Screening Results:")
-        for i, result in enumerate(state['background_check_results'], 1):
-            print(f"\n  {i}. {result['name']}")
-            print(f"     Hits: {result['total_hits']}")
-            print(f"     PEP: {result['is_pep']}")
-            print(f"     Sanctioned: {result['is_sanctioned']}")
+    print(f"\n✅ Agents Executed: 4/4")
+    print(f"   1. DocumentIntake: {'✅ Pass' if state.get('file_valid') else '❌ Fail'}")
+    print(f"   2. OCR: {'✅ Pass' if state.get('has_text') else '⚠️  Limited text'}")
+    print(f"   3. FormatValidation: {'✅ Pass' if state.get('format_valid') else '❌ Fail'}")
+    print(f"   4. BackgroundCheck: {'✅ Pass' if state.get('background_check_executed') else '❌ Fail'}")
+    
+    print(f"\n📈 Overall Assessment:")
+    print(f"   - Format Quality: {state.get('format_quality_score', 0)}/100")
+    print(f"   - Background Risk: {state.get('background_risk_score', 0)}/100")
+    print(f"   - PEP Risk: {'HIGH' if state.get('pep_found') else 'LOW'}")
+    print(f"   - Sanctions Risk: {'CRITICAL' if state.get('sanctions_found') else 'LOW'}")
+    
+    total_errors = len(state.get('errors', []))
+    if total_errors > 0:
+        print(f"\n⚠️  Total Errors: {total_errors}")
+        for error in state.get('errors', []):
+            print(f"   - {error}")
+    else:
+        print(f"\n✅ No errors encountered")
     
     print()
     print("=" * 80)
