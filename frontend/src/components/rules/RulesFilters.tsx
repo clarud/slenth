@@ -92,17 +92,6 @@ const RulesFilters = ({ filters, onChange, onReset, onAddRules }: RulesFiltersPr
             </SelectContent>
           </Select>
         </div>
-
-        {/* Section (Internal) */}
-        <div className="space-y-2">
-          <Label htmlFor="section">Section</Label>
-          <Input
-            id="section"
-            placeholder="e.g. AML_CASH"
-            value={filters.section || ""}
-            onChange={(e) => onChange({ ...filters, section: e.target.value, page: 1 })}
-          />
-        </div>
       </div>
 
       <div className="flex items-center justify-between">

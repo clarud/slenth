@@ -17,7 +17,7 @@ Output:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
@@ -144,7 +144,7 @@ class ContextBuilderAgent(Part1Agent):
         if not customer_id:
             return []
 
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now() - timedelta(days=days)
 
         try:
             transactions = (

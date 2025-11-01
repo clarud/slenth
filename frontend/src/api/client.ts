@@ -39,9 +39,15 @@ export const fetchTransactionCompliance = async (
 };
 
 // Documents
-export const uploadDocument = async (file: File): Promise<UploadedDocument> => {
+export const uploadDocument = async (
+  file: File,
+  transactionId?: string
+): Promise<UploadedDocument> => {
   const formData = new FormData();
   formData.append("file", file);
+  if (transactionId) {
+    formData.append("transaction_id", transactionId);
+  }
   const { data } = await api.post(API.DOCUMENT_UPLOAD_PATH, formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
@@ -73,26 +79,22 @@ export const createInternalRulesFromText = async (
   payload: InternalRulesPayload
 ): Promise<InternalRulesUploadResponse> => {
   try {
-    // Try JSON POST first (preferred)
-    const { data } = await api.post(API.INTERNAL_RULES_TEXT_PATH, payload);
+    // Use the upload endpoint which accepts { rules: [...] } format
+    const jsonString = JSON.stringify(payload, null, 2);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const file = new File([blob], "internal_rules.json", {
+      type: "application/json",
+    });
+    
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const { data } = await api.post(API.INTERNAL_RULES_UPLOAD_PATH, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
     return data;
   } catch (error) {
-    if (axios.isAxiosError(error) && (error.response?.status === 404 || error.response?.status === 405)) {
-      // Fallback to multipart upload
-      const jsonString = JSON.stringify(payload, null, 2);
-      const blob = new Blob([jsonString], { type: "application/json" });
-      const file = new File([blob], "internal_rules.json", {
-        type: "application/json",
-      });
-      
-      const formData = new FormData();
-      formData.append("file", file);
-      
-      const { data } = await api.post(API.INTERNAL_RULES_UPLOAD_PATH, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      return data;
-    }
+    console.error("Failed to upload internal rules:", error);
     throw error;
   }
 };

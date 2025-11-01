@@ -19,7 +19,6 @@ from typing import Any, Dict
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +26,9 @@ logger = logging.getLogger(__name__)
 class FeatureServiceAgent(Part1Agent):
     """Agent: Generate deterministic features from transaction + history"""
 
-    def __init__(self, llm_service: LLMService = None, vector_service: VectorDBService = None):
+    def __init__(self, llm_service: LLMService = None):
         super().__init__("feature_service")
         self.llm = llm_service
-        self.vector_db = vector_service
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -69,8 +67,21 @@ class FeatureServiceAgent(Part1Agent):
                 features["avg_amount_7d"] = 0
             
             # Geographic features
-            features["is_cross_border"] = transaction.get("sender_country") != transaction.get("receiver_country")
-            features["is_high_risk_country"] = transaction.get("receiver_country") in ["XX", "YY", "ZZ"]
+            originator_country = transaction.get("originator_country", "")
+            beneficiary_country = transaction.get("beneficiary_country", "")
+            
+            features["is_cross_border"] = originator_country != beneficiary_country
+            
+            # High-risk countries (FATF grey/black lists and common AML concern countries)
+            high_risk_countries = {
+                "AF", "AL", "BB", "BF", "KH", "KY", "CI", "HT", "IR", "IQ", "JM", "JO", 
+                "KP", "LB", "LY", "ML", "MM", "NI", "PK", "PA", "PH", "RU", "SN", "SO",
+                "SS", "SD", "SY", "TT", "TR", "UG", "AE", "VE", "YE", "ZW"
+            }
+            features["is_high_risk_country"] = (
+                beneficiary_country in high_risk_countries or 
+                originator_country in high_risk_countries
+            )
             
             # Structuring indicators
             features["potential_structuring"] = (

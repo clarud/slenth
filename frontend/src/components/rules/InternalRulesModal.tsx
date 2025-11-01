@@ -61,8 +61,20 @@ const InternalRulesModal = ({ isOpen, onClose, onSuccess }: InternalRulesModalPr
 
       // Basic validation of rule structure
       normalized.rules.forEach((rule, idx) => {
-        if (!rule.title || !rule.text) {
-          throw new Error(`Rule ${idx + 1}: 'title' and 'text' are required`);
+        // Required fields: text, effective_date
+        if (!rule.text) {
+          throw new Error(`Rule ${idx + 1}: 'text' is required`);
+        }
+        if (!rule.effective_date) {
+          throw new Error(`Rule ${idx + 1}: 'effective_date' is required (format: YYYY-MM-DD)`);
+        }
+        
+        // Validate date format if provided
+        if (rule.effective_date && !/^\d{4}-\d{2}-\d{2}$/.test(rule.effective_date)) {
+          throw new Error(`Rule ${idx + 1}: 'effective_date' must be in YYYY-MM-DD format`);
+        }
+        if (rule.sunset_date && !/^\d{4}-\d{2}-\d{2}$/.test(rule.sunset_date)) {
+          throw new Error(`Rule ${idx + 1}: 'sunset_date' must be in YYYY-MM-DD format`);
         }
       });
 
@@ -163,7 +175,7 @@ const InternalRulesModal = ({ isOpen, onClose, onSuccess }: InternalRulesModalPr
               <textarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={`Paste your JSON here:\n\n[\n  {\n    "title": "Large Cash Transaction Reporting",\n    "description": "...",\n    "text": "Full rule text...",\n    "section": "AML_CASH_REPORTING",\n    "effective_date": "2025-01-01",\n    "version": "v1.0"\n  }\n]`}
+                placeholder={`Paste your JSON here:\n\n{\n  "rules": [\n    {\n      "text": "Transactions that deviate from customer patterns must be flagged for review",\n      "section": "AML_UNUSUAL_ACTIVITY_MONITORING",\n      "obligation_type": "mandatory",\n      "conditions": ["transaction_frequency > 2x average_past_3_months", "amount > 50000"],\n      "expected_evidence": ["Case escalation record", "EDD report"],\n      "penalty_level": "high",\n      "effective_date": "2025-01-01",\n      "version": "v1.0",\n      "source": "Internal AML Monitoring Framework"\n    }\n  ]\n}`}
                 className="w-full h-80 p-4 font-mono text-sm rounded-lg border border-input bg-background resize-none focus-ring"
                 disabled={submitting}
               />
@@ -191,29 +203,50 @@ const InternalRulesModal = ({ isOpen, onClose, onSuccess }: InternalRulesModalPr
               </summary>
               <div className="mt-2 p-4 rounded-lg bg-muted/50 border border-border">
                 <pre className="text-xs overflow-x-auto">
-{`// Option A: Wrapper object
+{`// Option A: Wrapper object (recommended)
 {
   "rules": [
     {
-      "title": "Large Cash Transaction Reporting",
-      "description": "Report cash transactions over threshold",
-      "text": "All cash transactions exceeding CHF 100,000...",
-      "section": "AML_CASH_REPORTING",
+      "text": "Transactions that significantly deviate from a customer's historical patterns must be flagged for enhanced review",
+      "section": "AML_UNUSUAL_ACTIVITY_MONITORING",
       "obligation_type": "mandatory",
-      "conditions": ["amount > 100000"],
-      "expected_evidence": ["Transaction receipt"],
+      "conditions": [
+        "transaction_frequency > 2x average_past_3_months",
+        "amount > 50000",
+        "destination_country in ['HighRiskList']"
+      ],
+      "expected_evidence": [
+        "Case escalation record",
+        "Enhanced Due Diligence (EDD) report",
+        "Customer risk profile summary"
+      ],
       "penalty_level": "high",
       "effective_date": "2025-01-01",
       "version": "v1.0",
-      "source": "Internal Policy Manual"
+      "source": "Internal AML Monitoring Framework"
     }
   ]
 }
 
 // Option B: Bare array (auto-wrapped)
 [
-  { "title": "...", "text": "...", "section": "..." }
-]`}
+  {
+    "text": "All cash transactions exceeding CHF 100,000 must be reported",
+    "section": "AML_CASH_REPORTING",
+    "obligation_type": "mandatory",
+    "conditions": ["amount > 100000"],
+    "expected_evidence": ["Transaction receipt", "CTR filing"],
+    "penalty_level": "high",
+    "effective_date": "2025-01-01",
+    "version": "v1.0",
+    "source": "Internal Policy Manual"
+  }
+]
+
+// Required fields: text, effective_date
+// Optional fields: rule_id (for updates), section, obligation_type, conditions,
+//                  expected_evidence, penalty_level, sunset_date, version, source, metadata
+// Note: If rule_id is provided, will update existing rule by ID`}
                 </pre>
               </div>
             </details>

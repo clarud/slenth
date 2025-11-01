@@ -18,7 +18,6 @@ from typing import Any, Dict
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +25,9 @@ logger = logging.getLogger(__name__)
 class ControlTestAgent(Part1Agent):
     """Agent: Test each control/rule: pass/fail/partial"""
 
-    def __init__(self, llm_service: LLMService = None, vector_service: VectorDBService = None):
+    def __init__(self, llm_service: LLMService = None):
         super().__init__("control_test")
         self.llm = llm_service
-        self.vector_db = vector_service
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -91,7 +89,42 @@ Determine if the transaction passes this control. Respond in JSON:
                     )
 
                     import json
-                    result = json.loads(response)
+                    import re
+                    
+                    # Validate response is not empty
+                    if not response or not response.strip():
+                        self.logger.warning(f"Empty response from LLM for rule {rule_id}")
+                        result = {
+                            "status": "partial",
+                            "rationale": "No LLM response received",
+                            "compliance_score": 50
+                        }
+                    else:
+                        try:
+                            result = json.loads(response)
+                        except json.JSONDecodeError as je:
+                            self.logger.error(f"JSON parse error for rule {rule_id}: {je}")
+                            self.logger.debug(f"Raw response (first 200 chars): {response[:200]}")
+                            
+                            # Try to extract JSON from mixed text response
+                            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                            if json_match:
+                                try:
+                                    result = json.loads(json_match.group())
+                                    self.logger.info(f"Successfully extracted JSON from mixed response")
+                                except:
+                                    # Give up and use default
+                                    result = {
+                                        "status": "partial",
+                                        "rationale": f"Parse error: {str(je)[:100]}",
+                                        "compliance_score": 50
+                                    }
+                            else:
+                                result = {
+                                    "status": "partial",
+                                    "rationale": f"No valid JSON found in response",
+                                    "compliance_score": 50
+                                }
 
                     control_results.append({
                         "rule_id": rule_id,
@@ -108,7 +141,7 @@ Determine if the transaction passes this control. Respond in JSON:
                     )
 
                 except Exception as e:
-                    self.logger.error(f"Error testing control for rule {rule_id}: {e}")
+                    self.logger.error(f"Unexpected error testing control for rule {rule_id}: {e}")
                     control_results.append({
                         "rule_id": rule_id,
                         "rule_title": rule.get("title", ""),

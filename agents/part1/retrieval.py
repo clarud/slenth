@@ -1,12 +1,12 @@
 """
-RetrievalAgent - Hybrid search (BM25 + vector) for applicable rules
+RetrievalAgent - Semantic search for applicable rules using Pinecone
 
 Logic:
 
 1. Take query_strings from context
-2. Generate embeddings for each query
-3. Perform hybrid search on external_rules (Qdrant) and internal_rules (Pinecone) collections
-4. Apply filters (jurisdiction, effective_date)
+2. Perform semantic search using Pinecone's integrated embeddings (no separate embedding service)
+3. Search both internal_rules and external_rules Pinecone indexes
+4. Apply filters (jurisdiction, effective_date, is_active)
 5. Re-rank results by relevance
 6. Return top-k applicable rules with metadata
 
@@ -20,30 +20,24 @@ from typing import Any, Dict
 
 from agents import Part1Agent
 from services.llm import LLMService
-from services.vector_db import VectorDBService
 from services.pinecone_db import PineconeService
-from services.embeddings import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
 
 class RetrievalAgent(Part1Agent):
-    """Agent: Hybrid search (BM25 + vector) for applicable rules"""
+    """Agent: Semantic search for applicable rules using Pinecone with integrated embeddings"""
 
     def __init__(
         self, 
         llm_service: LLMService = None, 
-        vector_service: VectorDBService = None,
         pinecone_internal: PineconeService = None,
         pinecone_external: PineconeService = None,
-        embedding_service: EmbeddingService = None
     ):
         super().__init__("retrieval")
         self.llm = llm_service
-        self.vector_db = vector_service  # Deprecated - for backward compatibility
         self.pinecone_internal = pinecone_internal or PineconeService(index_type="internal")
         self.pinecone_external = pinecone_external or PineconeService(index_type="external")
-        self.embeddings = embedding_service or EmbeddingService()
 
     async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -66,7 +60,8 @@ class RetrievalAgent(Part1Agent):
                 return state
 
             transaction = state.get("transaction", {})
-            jurisdiction = transaction.get("jurisdiction", "HK")
+            # Don't filter by jurisdiction - retrieve all relevant rules regardless of jurisdiction
+            # This allows rules from ADGM, HK, SG, etc. to all be considered
             
             # Get current date for effective_date filtering
             from datetime import datetime
@@ -75,35 +70,35 @@ class RetrievalAgent(Part1Agent):
             all_rules = []
             seen_rule_ids = set()
 
-            # Perform hybrid search for each query string
+            # Perform semantic search for each query string using Pinecone's integrated embeddings
             for query in query_strings:
                 self.logger.info(f"Searching for query: {query[:100]}...")
 
-                # Generate embedding for query
-                query_embedding = self.embeddings.embed_text(query)
-
-                # Search internal rules (Pinecone internal index)
-                internal_results = await self.pinecone_internal.similarity_search(
-                    query_vector=query_embedding,
+                # Search internal rules (Pinecone internal index) - uses Pinecone's built-in embedding
+                # Use "__default__" namespace as per Pinecone API 2025-04
+                # Only filter by is_active, not jurisdiction (to allow multi-jurisdiction rules)
+                internal_results = self.pinecone_internal.search_by_text(
+                    query_text=query,
                     top_k=10,
                     filters={
-                        "jurisdiction": jurisdiction,
                         "is_active": True,
-                    }
+                    },
+                    namespace="__default__"
                 )
 
-                # Search external rules (Pinecone external index)
-                external_results = await self.pinecone_external.similarity_search(
-                    query_vector=query_embedding,
+                # Search external rules (Pinecone external index) - uses Pinecone's built-in embedding
+                # No filters for external rules (might not have is_active field)
+                external_results = self.pinecone_external.search_by_text(
+                    query_text=query,
                     top_k=10,
-                    filters={
-                        "jurisdiction": jurisdiction,
-                    }
+                    filters=None,
+                    namespace="__default__"
                 )
 
                 # Combine and deduplicate
                 for result in internal_results + external_results:
-                    rule_id = result.get("rule_id")
+                    # Handle both new schema (rule_id) and old schema (passage_id)
+                    rule_id = result.get("rule_id") or result.get("passage_id")
                     if rule_id and rule_id not in seen_rule_ids:
                         seen_rule_ids.add(rule_id)
                         
@@ -117,16 +112,34 @@ class RetrievalAgent(Part1Agent):
                             except:
                                 pass  # Keep rule if date parsing fails
                         
+                        # Transform Pinecone data schema to expected agent schema
+                        # Handle both direct fields and nested metadata
+                        passage_ref = result.get("passage_ref", "N/A")
+                        document_id = result.get("document_id", "N/A")
+                        passage_text = result.get("passage_text", "") or result.get("description", "")
+                        jurisdiction = result.get("jurisdiction", "ADGM")
+                        
+                        # Build human-readable title and source
+                        title = result.get("title") or f"{jurisdiction} AML - Section {passage_ref}"
+                        source = result.get("source") or f"{jurisdiction} AML Rulebook, Doc {document_id}, {passage_ref}"
+                        
                         all_rules.append({
                             "rule_id": rule_id,
-                            "title": result.get("title", ""),
-                            "description": result.get("description", ""),
-                            "rule_type": result.get("rule_type", ""),
+                            "title": title,
+                            "description": passage_text or result.get("text", ""),
+                            "rule_type": result.get("rule_type", "aml_requirement"),
                             "severity": result.get("severity", "medium"),
-                            "jurisdiction": result.get("jurisdiction", ""),
-                            "source": result.get("source", ""),
+                            "jurisdiction": jurisdiction,
+                            "source": source,
                             "score": result.get("score", 0.0),
-                            "metadata": result.get("metadata", {}),
+                            "metadata": {
+                                "document_id": document_id,
+                                "passage_ref": passage_ref,
+                                "full_text_length": result.get("full_text_length"),
+                                "is_active": result.get("is_active", True),
+                                "document_type": result.get("document_type"),
+                                "ingestion_date": result.get("ingestion_date"),
+                            },
                         })
 
             # Sort by score (descending) and take top 20
@@ -142,8 +155,5 @@ class RetrievalAgent(Part1Agent):
             self.logger.error(f"Error in RetrievalAgent: {str(e)}", exc_info=True)
             state["applicable_rules"] = []
             state["errors"] = state.get("errors", []) + [f"RetrievalAgent: {str(e)}"]
-
-        return state
-        state["retrieval_executed"] = True
 
         return state

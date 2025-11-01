@@ -9,46 +9,59 @@ import type { TransactionDetail, UploadedDocument } from "@/types/api";
 const Home = () => {
   const [selectedTxId, setSelectedTxId] = useState<string>();
   const [transactionDetail, setTransactionDetail] = useState<TransactionDetail>();
-  const [uploadedDoc, setUploadedDoc] = useState<UploadedDocument>();
-  const [reportMode, setReportMode] = useState<"transaction" | "upload">("transaction");
+  const [loading, setLoading] = useState(false);
 
   const handleSelectTransaction = async (id: string) => {
-    try {
-      setSelectedTxId(id);
-      setReportMode("transaction");
-      
-      const [status, compliance] = await Promise.all([
-        fetchTransactionStatus(id),
-        fetchTransactionCompliance(id),
-      ]);
+    // Set selection state immediately - don't clear existing detail yet
+    setSelectedTxId(id);
+    setLoading(true);
 
+    try {
+      // First, fetch and display the status immediately
+      const status = await fetchTransactionStatus(id);
+
+      // Show status first (even if pending)
       setTransactionDetail({
         ...status,
-        compliance,
+        compliance: undefined,
       });
-    } catch (error) {
-      toast.error("Failed to load transaction details");
-      console.error(error);
-    }
-  };
+      setLoading(false);
 
-  const handleUploadView = () => {
-    setReportMode("upload");
+      // Only fetch compliance if status indicates completion
+      const statusLower = (status.status || "").toLowerCase();
+      if (statusLower === "completed" || statusLower === "complete") {
+        try {
+          const compliance = await fetchTransactionCompliance(id);
+          setTransactionDetail({
+            ...status,
+            compliance,
+          });
+        } catch (complianceError) {
+          // Compliance endpoint might still 404 or error; keep status-only view
+          console.log("Compliance fetch failed after completed status:", complianceError);
+        }
+      } else {
+        // Do not call compliance endpoint when pending/processing/failed
+        console.log(`Skipping compliance fetch; status=${status.status}`);
+      }
+    } catch (error) {
+      // Even if status fetch fails, keep the transaction selected
+      console.error("Failed to load transaction details:", error);
+      toast.error("Failed to load transaction details");
+      setLoading(false);
+    }
   };
 
   return (
     <Shell>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-[calc(100vh-12rem)]">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-full">
         <TransactionsPanel
           onSelectTransaction={handleSelectTransaction}
           selectedId={selectedTxId}
-          onUploadView={handleUploadView}
         />
         <ReportView
           transactionDetail={transactionDetail}
-          uploadedDoc={uploadedDoc}
-          mode={reportMode}
-          onModeChange={setReportMode}
+          loading={loading}
         />
       </div>
     </Shell>

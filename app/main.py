@@ -10,7 +10,7 @@ from loguru import logger
 
 from config import settings
 from db.database import init_db
-from app.api import transactions, documents, internal_rules, alerts, cases, health, rules
+from app.api import transactions, documents, internal_rules, alerts, cases, health, rules, monitoring
 
 
 def _mask_url(url: str) -> str:
@@ -131,6 +131,7 @@ app.include_router(internal_rules.router, prefix="/internal_rules", tags=["Inter
 app.include_router(rules.router, prefix="/rules", tags=["Rules (Unified)"])
 app.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
 app.include_router(cases.router, prefix="/cases", tags=["Cases"])
+app.include_router(monitoring.router, tags=["Monitoring"])
 
 
 # Root endpoint

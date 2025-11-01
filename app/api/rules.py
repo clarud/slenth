@@ -59,13 +59,12 @@ async def get_all_rules(
         internal_query = db.query(InternalRule).filter(InternalRule.is_active == is_active)
         
         if section:
-            internal_query = internal_query.filter(InternalRule.section == section)
+            internal_query = internal_query.filter(InternalRule.rule_category == section)
         
         if search:
             search_pattern = f"%{search}%"
             internal_query = internal_query.filter(
-                (InternalRule.title.ilike(search_pattern)) |
-                (InternalRule.text.ilike(search_pattern))
+                InternalRule.rule_text.ilike(search_pattern)
             )
         
         internal_rules = internal_query.all()
@@ -97,10 +96,10 @@ async def get_all_rules(
         all_rules.append(RuleItem(
             rule_id=rule.rule_id,
             rule_type="internal",
-            title=rule.title,
-            description=rule.description,
-            text=rule.text[:500] + "..." if len(rule.text) > 500 else rule.text,  # Truncate for list view
-            section=rule.section,
+            title=rule.rule_text[:100] + "..." if len(rule.rule_text) > 100 else rule.rule_text,  # Use first 100 chars as title
+            description=None,
+            text=rule.rule_text[:500] + "..." if len(rule.rule_text) > 500 else rule.rule_text,  # Truncate for list view
+            section=rule.rule_category,  # Use category as section
             regulator=None,
             jurisdiction=None,
             source=rule.source,
@@ -109,8 +108,9 @@ async def get_all_rules(
             is_active=rule.is_active,
             created_at=rule.created_at,
             metadata={
-                "obligation_type": rule.obligation_type,
-                "penalty_level": rule.penalty_level,
+                "rule_category": rule.rule_category,
+                "rule_priority": rule.rule_priority,
+                "policy_reference": rule.policy_reference,
             }
         ))
     

@@ -11,8 +11,6 @@ from pydantic import BaseModel, Field
 class InternalRuleCreate(BaseModel):
     """Schema for creating a new internal rule."""
 
-    title: str = Field(..., description="Rule title")
-    description: str = Field(..., description="Detailed rule description")
     text: str = Field(..., description="Full rule text content")
     section: Optional[str] = Field(None, description="Rule section/category")
     obligation_type: Optional[str] = Field(None, description="Type of obligation")
@@ -28,8 +26,6 @@ class InternalRuleCreate(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "title": "EDD Required for High-Risk Jurisdictions",
-                "description": "Enhanced Due Diligence must be performed for transactions involving high-risk jurisdictions",
                 "text": "For all transactions with counterparties in high-risk jurisdictions as defined by FATF, Enhanced Due Diligence procedures must be completed within 48 hours...",
                 "section": "KYC/EDD",
                 "obligation_type": "mandatory",
@@ -46,8 +42,6 @@ class InternalRuleCreate(BaseModel):
 class InternalRuleUpdate(BaseModel):
     """Schema for updating an internal rule (creates new version)."""
 
-    title: Optional[str] = None
-    description: Optional[str] = None
     text: Optional[str] = None
     section: Optional[str] = None
     obligation_type: Optional[str] = None
@@ -74,8 +68,6 @@ class InternalRuleResponse(BaseModel):
     """Response schema for internal rule."""
 
     rule_id: str
-    title: str
-    description: str
     text: str
     section: Optional[str]
     obligation_type: Optional[str]

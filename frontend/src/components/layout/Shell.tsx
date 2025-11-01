@@ -7,12 +7,13 @@ const Shell = ({ children }: { children: React.ReactNode }) => {
   
   const tabs = [
     { name: "Dashboard", path: "/" },
+    { name: "Upload", path: "/upload" },
     { name: "Rules", path: "/rules" },
   ];
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border bg-white/80 backdrop-blur-sm">
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
+      <header className="flex-shrink-0 border-b border-border bg-white/80 backdrop-blur-sm">
         <div className="container mx-auto px-4">
           <div className="flex h-16 items-center justify-between">
             {/* Logo & Brand */}
@@ -57,7 +58,9 @@ const Shell = ({ children }: { children: React.ReactNode }) => {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">{children}</main>
+      <main className="flex-1 overflow-hidden">
+        <div className="container mx-auto px-4 py-8 h-full">{children}</div>
+      </main>
     </div>
   );
 };

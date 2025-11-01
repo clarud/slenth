@@ -21,7 +21,6 @@ const Rules = () => {
     rule_type: (searchParams.get("rule_type") as any) || "all",
     regulator: (searchParams.get("regulator") as any) || undefined,
     jurisdiction: (searchParams.get("jurisdiction") as any) || undefined,
-    section: searchParams.get("section") || "",
     is_active: searchParams.get("is_active") !== "false",
     page: Number(searchParams.get("page")) || 1,
     page_size: Number(searchParams.get("page_size")) || 25,
@@ -42,7 +41,6 @@ const Rules = () => {
       params.set("rule_type", filters.rule_type);
     if (filters.regulator) params.set("regulator", filters.regulator);
     if (filters.jurisdiction) params.set("jurisdiction", filters.jurisdiction);
-    if (filters.section) params.set("section", filters.section);
     if (!filters.is_active) params.set("is_active", "false");
     if (filters.page && filters.page > 1) params.set("page", String(filters.page));
     if (filters.page_size !== 25) params.set("page_size", String(filters.page_size));
@@ -69,7 +67,7 @@ const Rules = () => {
     };
 
     loadRules();
-  }, [debouncedSearch, filters.rule_type, filters.regulator, filters.jurisdiction, filters.section, filters.is_active, filters.page, filters.page_size]);
+  }, [debouncedSearch, filters.rule_type, filters.regulator, filters.jurisdiction, filters.is_active, filters.page, filters.page_size]);
 
   const handleReset = () => {
     setFilters({
@@ -92,114 +90,122 @@ const Rules = () => {
 
   return (
     <Shell>
-      <div className="space-y-6">
-        <RulesFilters
-          filters={filters}
-          onChange={setFilters}
-          onReset={handleReset}
-          onAddRules={() => setShowAddModal(true)}
-        />
+      <div className="flex flex-col h-full overflow-hidden">
+        {/* Filters - Fixed at top */}
+        <div className="flex-shrink-0">
+          <RulesFilters
+            filters={filters}
+            onChange={setFilters}
+            onReset={handleReset}
+            onAddRules={() => setShowAddModal(true)}
+          />
+        </div>
 
-        {/* Counts - only show if there are rules */}
-        {response && response.total > 0 && (
-          <div className="flex gap-3">
-            <div className="badge-primary px-4 py-2">
-              Total: {response.total}
-            </div>
-            {response.internal_count !== undefined && (
-              <div className="badge-muted px-4 py-2">
-                Internal: {response.internal_count}
-              </div>
-            )}
-            {response.external_count !== undefined && (
-              <div className="badge-muted px-4 py-2">
-                External: {response.external_count}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Loading State */}
-        {loading && (
-          <div className="flex justify-center py-12">
-            <Spinner size="lg" />
-          </div>
-        )}
-
-        {/* Empty State */}
-        {!loading && response && response.rules.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="card p-12"
-          >
-            <div className="max-w-md mx-auto text-center space-y-4">
-              <div className="h-16 w-16 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
-                <svg className="h-8 w-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              
-              <div>
-                <h3 className="text-lg font-semibold text-foreground mb-2">
-                  {response.total === 0 && !filters.search && filters.rule_type === "all"
-                    ? "No rules in the system yet"
-                    : "No rules match your filters"}
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  {response.total === 0 && !filters.search && filters.rule_type === "all"
-                    ? "Get started by adding your first internal rules"
-                    : "Try adjusting your search or filter criteria"}
-                </p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="btn-primary"
-                >
-                  Add Internal Rules
-                </button>
-                {(filters.search || filters.rule_type !== "all" || filters.regulator || filters.jurisdiction || filters.section) && (
-                  <button
-                    onClick={handleReset}
-                    className="btn-outline"
-                  >
-                    Reset Filters
-                  </button>
+        {/* Scrollable Content Area */}
+        <div className="flex-1 overflow-y-auto min-h-0 mt-6">
+          <div className="space-y-6">
+            {/* Counts - only show if there are rules */}
+            {response && response.total > 0 && (
+              <div className="flex gap-3">
+                <div className="badge-primary px-4 py-2">
+                  Total: {response.total}
+                </div>
+                {response.internal_count !== undefined && (
+                  <div className="badge-muted px-4 py-2">
+                    Internal: {response.internal_count}
+                  </div>
+                )}
+                {response.external_count !== undefined && (
+                  <div className="badge-muted px-4 py-2">
+                    External: {response.external_count}
+                  </div>
                 )}
               </div>
-            </div>
-          </motion.div>
-        )}
+            )}
 
-        {/* Rules Grid */}
-        {!loading && response && response.rules.length > 0 && (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {response.rules.map((rule) => (
-                <RuleCard
-                  key={rule.rule_id}
-                  rule={rule}
-                  onClick={() => setSelectedRule(rule)}
-                />
-              ))}
-            </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="card p-4">
-                <Pagination
-                  currentPage={filters.page || 1}
-                  totalPages={totalPages}
-                  pageSize={filters.page_size || 25}
-                  totalItems={response.total}
-                  onPageChange={(page) => setFilters((prev) => ({ ...prev, page }))}
-                />
+            {/* Loading State */}
+            {loading && (
+              <div className="flex justify-center py-12">
+                <Spinner size="lg" />
               </div>
             )}
-          </>
-        )}
+
+            {/* Empty State */}
+            {!loading && response && response.rules.length === 0 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="card p-12"
+              >
+                <div className="max-w-md mx-auto text-center space-y-4">
+                  <div className="h-16 w-16 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
+                    <svg className="h-8 w-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground mb-2">
+                      {response.total === 0 && !filters.search && filters.rule_type === "all"
+                        ? "No rules in the system yet"
+                        : "No rules match your filters"}
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      {response.total === 0 && !filters.search && filters.rule_type === "all"
+                        ? "Get started by adding your first internal rules"
+                        : "Try adjusting your search or filter criteria"}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
+                    <button
+                      onClick={() => setShowAddModal(true)}
+                      className="btn-primary"
+                    >
+                      Add Internal Rules
+                    </button>
+                    {(filters.search || filters.rule_type !== "all" || filters.regulator || filters.jurisdiction) && (
+                      <button
+                        onClick={handleReset}
+                        className="btn-outline"
+                      >
+                        Reset Filters
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* Rules Grid */}
+            {!loading && response && response.rules.length > 0 && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {response.rules.map((rule) => (
+                    <RuleCard
+                      key={rule.rule_id}
+                      rule={rule}
+                      onClick={() => setSelectedRule(rule)}
+                    />
+                  ))}
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="card p-4">
+                    <Pagination
+                      currentPage={filters.page || 1}
+                      totalPages={totalPages}
+                      pageSize={filters.page_size || 25}
+                      totalItems={response.total}
+                      onPageChange={(page) => setFilters((prev) => ({ ...prev, page }))}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       <RuleDetailModal rule={selectedRule} onClose={() => setSelectedRule(null)} />

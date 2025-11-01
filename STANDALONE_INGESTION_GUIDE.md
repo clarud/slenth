@@ -24,7 +24,7 @@ Ensure `internal_rules/*.json` files exist (you already have these)
 ### 3. Dependencies
 
 ```bash
-pip install pinecone-client
+pip install pinecone
 ```
 
 ---

@@ -22,8 +22,7 @@ from app.schemas.rule import (
 from db.database import get_db
 from db.models import InternalRule
 from services.audit import AuditService
-from services.embeddings import EmbeddingService
-from services.vector_db import VectorDBService
+from services.pinecone_db import PineconeService
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -37,52 +36,58 @@ async def create_internal_rule(
     db: Session = Depends(get_db),
 ) -> InternalRuleResponse:
     """Create a new internal rule and embed it in vector DB."""
-    logger.info(f"Creating internal rule: {rule.title}")
+    logger.info(f"Creating internal rule")
 
     try:
-        # Create rule in database
+        # Create rule in database - map schema fields to actual DB model fields
+        import uuid
         db_rule = InternalRule(
-            title=rule.title,
-            description=rule.description,
-            text=rule.text,
-            section=rule.section,
-            obligation_type=rule.obligation_type,
-            conditions=rule.conditions or [],
-            expected_evidence=rule.expected_evidence or [],
-            penalty_level=rule.penalty_level,
-            effective_date=rule.effective_date,
-            sunset_date=rule.sunset_date,
+            rule_id=str(uuid.uuid4()),
+            rule_text=rule.text,
+            rule_category=rule.section or "GENERAL",
+            rule_priority=rule.penalty_level or "medium",
             version=rule.version,
+            effective_date=datetime.strptime(rule.effective_date, "%Y-%m-%d") if isinstance(rule.effective_date, str) else rule.effective_date,
+            sunset_date=datetime.strptime(rule.sunset_date, "%Y-%m-%d") if rule.sunset_date and isinstance(rule.sunset_date, str) else rule.sunset_date,
             source=rule.source,
-            metadata=rule.metadata or {},
+            policy_reference=rule.section,
+            meta={
+                "obligation_type": rule.obligation_type,
+                "conditions": rule.conditions or [],
+                "expected_evidence": rule.expected_evidence or [],
+                **(rule.metadata or {}),
+            },
         )
         db.add(db_rule)
         db.commit()
         db.refresh(db_rule)
 
-        # Embed in vector DB
+        # Embed in Pinecone using integrated embeddings
         try:
-            embedding_service = EmbeddingService()
-            vector_service = VectorDBService()
+            pinecone_service = PineconeService(index_type="internal")
 
-            embedding = embedding_service.embed_text(rule.text)
-            vector_service.upsert_vectors(
-                collection_name="internal_rules",
-                texts=[rule.text],
-                vectors=[embedding],
-                metadata=[
+            # Use Pinecone's upsert_records which generates embeddings automatically
+            pinecone_service.upsert_records(
+                records=[
                     {
-                        "rule_id": db_rule.rule_id,
-                        "title": rule.title,
-                        "section": rule.section,
-                        "effective_date": rule.effective_date,
-                        "version": rule.version,
-                        "is_active": True,
+                        "_id": db_rule.rule_id,
+                        "text": rule.text,
+                        "metadata": {
+                            "rule_id": db_rule.rule_id,
+                            "section": rule.section or "GENERAL",
+                            "effective_date": str(rule.effective_date) if rule.effective_date else None,
+                            "version": rule.version,
+                            "is_active": True,
+                            "obligation_type": rule.obligation_type,
+                            "penalty_level": rule.penalty_level,
+                        }
                     }
                 ],
+                namespace="internal-rules"
             )
+            logger.info(f"Embedded rule {db_rule.rule_id} in Pinecone")
         except Exception as e:
-            logger.error(f"Error embedding rule: {e}")
+            logger.error(f"Error embedding rule in Pinecone: {e}")
             # Continue anyway - rule is in DB
 
         # Log audit
@@ -96,20 +101,18 @@ async def create_internal_rule(
 
         return InternalRuleResponse(
             rule_id=db_rule.rule_id,
-            title=db_rule.title,
-            description=db_rule.description,
-            text=db_rule.text,
-            section=db_rule.section,
-            obligation_type=db_rule.obligation_type,
-            conditions=db_rule.conditions,
-            expected_evidence=db_rule.expected_evidence,
-            penalty_level=db_rule.penalty_level,
-            effective_date=db_rule.effective_date,
-            sunset_date=db_rule.sunset_date,
+            text=db_rule.rule_text,
+            section=db_rule.rule_category,
+            obligation_type=db_rule.meta.get("obligation_type") if db_rule.meta else None,
+            conditions=db_rule.meta.get("conditions", []) if db_rule.meta else [],
+            expected_evidence=db_rule.meta.get("expected_evidence", []) if db_rule.meta else [],
+            penalty_level=db_rule.rule_priority,
+            effective_date=db_rule.effective_date.strftime("%Y-%m-%d") if isinstance(db_rule.effective_date, datetime) else db_rule.effective_date,
+            sunset_date=db_rule.sunset_date.strftime("%Y-%m-%d") if db_rule.sunset_date and isinstance(db_rule.sunset_date, datetime) else db_rule.sunset_date,
             version=db_rule.version,
             source=db_rule.source,
             is_active=db_rule.is_active,
-            metadata=db_rule.metadata,
+            metadata=db_rule.meta or {},
             created_at=db_rule.created_at,
             updated_at=db_rule.updated_at,
         )
@@ -135,7 +138,7 @@ async def list_internal_rules(
     query = db.query(InternalRule).filter(InternalRule.is_active == is_active)
 
     if section:
-        query = query.filter(InternalRule.section == section)
+        query = query.filter(InternalRule.rule_category == section)
 
     total = query.count()
 
@@ -150,20 +153,18 @@ async def list_internal_rules(
         rules=[
             InternalRuleResponse(
                 rule_id=rule.rule_id,
-                title=rule.title,
-                description=rule.description,
-                text=rule.text,
-                section=rule.section,
-                obligation_type=rule.obligation_type,
-                conditions=rule.conditions,
-                expected_evidence=rule.expected_evidence,
-                penalty_level=rule.penalty_level,
-                effective_date=rule.effective_date,
-                sunset_date=rule.sunset_date,
+                text=rule.rule_text,
+                section=rule.rule_category,
+                obligation_type=rule.meta.get("obligation_type") if rule.meta else None,
+                conditions=rule.meta.get("conditions", []) if rule.meta else [],
+                expected_evidence=rule.meta.get("expected_evidence", []) if rule.meta else [],
+                penalty_level=rule.rule_priority,
+                effective_date=rule.effective_date.strftime("%Y-%m-%d") if isinstance(rule.effective_date, datetime) else rule.effective_date,
+                sunset_date=rule.sunset_date.strftime("%Y-%m-%d") if rule.sunset_date and isinstance(rule.sunset_date, datetime) else rule.sunset_date,
                 version=rule.version,
                 source=rule.source,
                 is_active=rule.is_active,
-                metadata=rule.metadata,
+                metadata=rule.meta or {},
                 created_at=rule.created_at,
                 updated_at=rule.updated_at,
             )
@@ -190,20 +191,18 @@ async def get_internal_rule(
 
     return InternalRuleResponse(
         rule_id=rule.rule_id,
-        title=rule.title,
-        description=rule.description,
-        text=rule.text,
-        section=rule.section,
-        obligation_type=rule.obligation_type,
-        conditions=rule.conditions,
-        expected_evidence=rule.expected_evidence,
-        penalty_level=rule.penalty_level,
-        effective_date=rule.effective_date,
-        sunset_date=rule.sunset_date,
+        text=rule.rule_text,
+        section=rule.rule_category,
+        obligation_type=rule.meta.get("obligation_type") if rule.meta else None,
+        conditions=rule.meta.get("conditions", []) if rule.meta else [],
+        expected_evidence=rule.meta.get("expected_evidence", []) if rule.meta else [],
+        penalty_level=rule.rule_priority,
+        effective_date=rule.effective_date.strftime("%Y-%m-%d") if isinstance(rule.effective_date, datetime) else rule.effective_date,
+        sunset_date=rule.sunset_date.strftime("%Y-%m-%d") if rule.sunset_date and isinstance(rule.sunset_date, datetime) else rule.sunset_date,
         version=rule.version,
         source=rule.source,
         is_active=rule.is_active,
-        metadata=rule.metadata,
+        metadata=rule.meta or {},
         created_at=rule.created_at,
         updated_at=rule.updated_at,
     )
@@ -361,8 +360,7 @@ async def upload_internal_rules_document(
             )
 
         # Initialize services
-        embedding_service = EmbeddingService()
-        vector_service = VectorDBService()
+        pinecone_service = PineconeService()
         audit_service = AuditService(db)
 
         created_count = 0
@@ -374,35 +372,38 @@ async def upload_internal_rules_document(
         for idx, rule_data in enumerate(rules):
             try:
                 # Validate required fields
-                required_fields = ["title", "text", "effective_date"]
+                required_fields = ["text", "effective_date"]
                 missing_fields = [f for f in required_fields if f not in rule_data]
                 if missing_fields:
                     errors.append(f"Rule {idx}: Missing required fields: {missing_fields}")
                     skipped_count += 1
                     continue
 
-                title = rule_data["title"]
                 text = rule_data["text"]
                 
-                # Check if rule already exists (by title)
-                existing = db.query(InternalRule).filter(
-                    InternalRule.title == title
-                ).first()
+                # Check if rule already exists by rule_id
+                existing = None
+                if rule_data.get("rule_id"):
+                    existing = db.query(InternalRule).filter(
+                        InternalRule.rule_id == rule_data["rule_id"]
+                    ).first()
 
                 if existing:
-                    # Update existing rule
-                    existing.description = rule_data.get("description", existing.description)
-                    existing.text = text
-                    existing.section = rule_data.get("section", existing.section)
-                    existing.obligation_type = rule_data.get("obligation_type", existing.obligation_type)
-                    existing.conditions = rule_data.get("conditions", existing.conditions)
-                    existing.expected_evidence = rule_data.get("expected_evidence", existing.expected_evidence)
-                    existing.penalty_level = rule_data.get("penalty_level", existing.penalty_level)
-                    existing.effective_date = rule_data.get("effective_date", existing.effective_date)
-                    existing.sunset_date = rule_data.get("sunset_date", existing.sunset_date)
+                    # Update existing rule - map to actual DB model fields
+                    existing.rule_text = text
+                    existing.rule_category = rule_data.get("section", existing.rule_category)
+                    existing.rule_priority = rule_data.get("penalty_level", existing.rule_priority)
+                    existing.effective_date = datetime.strptime(rule_data.get("effective_date"), "%Y-%m-%d") if rule_data.get("effective_date") and isinstance(rule_data.get("effective_date"), str) else existing.effective_date
+                    existing.sunset_date = datetime.strptime(rule_data.get("sunset_date"), "%Y-%m-%d") if rule_data.get("sunset_date") and isinstance(rule_data.get("sunset_date"), str) else existing.sunset_date
                     existing.version = rule_data.get("version", existing.version)
                     existing.source = rule_data.get("source", existing.source)
-                    existing.metadata = rule_data.get("metadata", existing.metadata)
+                    existing.policy_reference = rule_data.get("section", existing.policy_reference)
+                    existing.meta = {
+                        "obligation_type": rule_data.get("obligation_type"),
+                        "conditions": rule_data.get("conditions", []),
+                        "expected_evidence": rule_data.get("expected_evidence", []),
+                        **(rule_data.get("metadata", {})),
+                    }
                     existing.updated_at = datetime.utcnow()
                     
                     db.commit()
@@ -410,23 +411,26 @@ async def upload_internal_rules_document(
                     
                     rule_id = existing.rule_id
                     updated_count += 1
-                    logger.info(f"Updated rule: {title}")
+                    logger.info(f"Updated rule: {rule_id}")
                 else:
-                    # Create new rule
+                    # Create new rule - map to actual DB model fields
+                    import uuid
                     db_rule = InternalRule(
-                        title=title,
-                        description=rule_data.get("description", ""),
-                        text=text,
-                        section=rule_data.get("section"),
-                        obligation_type=rule_data.get("obligation_type"),
-                        conditions=rule_data.get("conditions", []),
-                        expected_evidence=rule_data.get("expected_evidence", []),
-                        penalty_level=rule_data.get("penalty_level"),
-                        effective_date=rule_data.get("effective_date"),
-                        sunset_date=rule_data.get("sunset_date"),
+                        rule_id=rule_data.get("rule_id") or str(uuid.uuid4()),
+                        rule_text=text,
+                        rule_category=rule_data.get("section", "GENERAL"),
+                        rule_priority=rule_data.get("penalty_level", "medium"),
                         version=rule_data.get("version", "v1.0"),
+                        effective_date=datetime.strptime(rule_data.get("effective_date"), "%Y-%m-%d") if rule_data.get("effective_date") and isinstance(rule_data.get("effective_date"), str) else datetime.utcnow(),
+                        sunset_date=datetime.strptime(rule_data.get("sunset_date"), "%Y-%m-%d") if rule_data.get("sunset_date") and isinstance(rule_data.get("sunset_date"), str) else None,
                         source=rule_data.get("source", "internal_policy_manual"),
-                        metadata=rule_data.get("metadata", {}),
+                        policy_reference=rule_data.get("section"),
+                        meta={
+                            "obligation_type": rule_data.get("obligation_type"),
+                            "conditions": rule_data.get("conditions", []),
+                            "expected_evidence": rule_data.get("expected_evidence", []),
+                            **(rule_data.get("metadata", {})),
+                        },
                     )
                     db.add(db_rule)
                     db.commit()
@@ -434,32 +438,35 @@ async def upload_internal_rules_document(
                     
                     rule_id = db_rule.rule_id
                     created_count += 1
-                    logger.info(f"Created rule: {title}")
+                    logger.info(f"Created rule: {rule_id}")
 
-                # Embed in vector DB
+                # Embed in vector DB using Pinecone
                 try:
-                    embedding = embedding_service.embed_text(text)
-                    vector_service.upsert_vectors(
-                        collection_name="internal_rules",
-                        texts=[text],
-                        vectors=[embedding],
-                        metadata=[
+                    pinecone_service.upsert_records(
+                        records=[
                             {
-                                "rule_id": rule_id,
-                                "title": title,
-                                "section": rule_data.get("section", ""),
-                                "effective_date": rule_data.get("effective_date", ""),
-                                "version": rule_data.get("version", "v1.0"),
-                                "is_active": True,
+                                "_id": rule_id,
+                                "text": text,
+                                "metadata": {
+                                    "rule_id": rule_id,
+                                    "section": rule_data.get("section", "GENERAL"),
+                                    "effective_date": rule_data.get("effective_date", ""),
+                                    "version": rule_data.get("version", "v1.0"),
+                                    "is_active": True,
+                                    "obligation_type": rule_data.get("obligation_type"),
+                                    "penalty_level": rule_data.get("penalty_level"),
+                                }
                             }
                         ],
+                        namespace="internal-rules"
                     )
+                    logger.info(f"Embedded rule {rule_id} in Pinecone")
                 except Exception as e:
-                    logger.warning(f"Failed to embed rule '{title}': {e}")
+                    logger.warning(f"Failed to embed rule {rule_id}: {e}")
                     # Continue - rule is still saved in database
 
             except Exception as e:
-                errors.append(f"Rule {idx} ('{rule_data.get('title', 'Unknown')}'): {str(e)}")
+                errors.append(f"Rule {idx}: {str(e)}")
                 skipped_count += 1
                 logger.error(f"Error processing rule {idx}: {e}")
                 db.rollback()

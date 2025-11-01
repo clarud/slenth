@@ -14,7 +14,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -40,7 +40,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    transaction_id: Optional[str] = Form(None),  # NEW: Optional transaction ID from Part 1
+    transaction_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
     """
@@ -51,7 +51,7 @@ async def upload_document(
 
     Args:
         file: Uploaded file
-        transaction_id: Optional transaction ID to link with Part 1 results
+        transaction_id: Optional transaction ID to link document to
         db: Database session
 
     Returns:
