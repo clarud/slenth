@@ -96,16 +96,15 @@ class Settings(BaseSettings):
         env="FINMA_CIRCULARS_URL"
     )
     
-    # World-Check One
-    worldcheck_api_key: Optional[str] = Field(default=None, env="WORLDCHECK_API_KEY")
-    worldcheck_api_secret: Optional[str] = Field(default=None, env="WORLDCHECK_API_SECRET")
-    worldcheck_group_id: Optional[str] = Field(default=None, env="WORLDCHECK_GROUP_ID")
-    worldcheck_base_url: str = Field(
-        default="https://api-worldcheck.refinitiv.com/v2",
-        env="WORLDCHECK_BASE_URL"
+    # Dilisense API (Background Check Service)
+    dilisense_api_key: Optional[str] = Field(default=None, env="DILISENSE_API_KEY")
+    dilisense_base_url: str = Field(
+        default="https://api.dilisense.com/v1",
+        env="DILISENSE_BASE_URL"
     )
-    worldcheck_timeout: int = Field(default=30, env="WORLDCHECK_TIMEOUT")
-    worldcheck_max_retries: int = Field(default=3, env="WORLDCHECK_MAX_RETRIES")
+    dilisense_timeout: int = Field(default=30, env="DILISENSE_TIMEOUT")
+    dilisense_max_retries: int = Field(default=3, env="DILISENSE_MAX_RETRIES")
+    dilisense_enabled: bool = Field(default=True, env="DILISENSE_ENABLED")
     
     # File Storage
     upload_dir: str = Field(default="data/uploaded_docs", env="UPLOAD_DIR")
@@ -133,6 +132,7 @@ class Settings(BaseSettings):
     # Documents
     document_processing_timeout: int = Field(default=300, env="DOCUMENT_PROCESSING_TIMEOUT")
     document_max_pages: int = Field(default=100, env="DOCUMENT_MAX_PAGES")
+    document_allowed_types: List[str] = Field(default=["pdf"], env="DOCUMENT_ALLOWED_TYPES")  # PDF only for now
     image_max_size_mb: int = Field(default=20, env="IMAGE_MAX_SIZE_MB")
     
     # Feature Flags

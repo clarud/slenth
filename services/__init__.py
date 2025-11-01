@@ -6,7 +6,7 @@ This package contains service classes for:
 - LLM interactions (OpenAI/Anthropic)
 - Embedding generation
 - Alert management
-- World-Check One API integration
+- Dilisense API integration (Background checks)
 - Audit logging
 """
 
@@ -15,6 +15,7 @@ from .embeddings import EmbeddingService
 from .llm import LLMService
 from .alert_service import AlertService
 from .audit import AuditService
+from .dilisense import DilisenseService
 
 __all__ = [
     "VectorDBService",
@@ -22,4 +23,5 @@ __all__ = [
     "LLMService",
     "AlertService",
     "AuditService",
+    "DilisenseService",
 ]
