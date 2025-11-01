@@ -23,6 +23,7 @@ from agents import Part1Agent
 from services.llm import LLMService
 from services.audit import AuditService
 from services.alert_service import AlertService
+from db.models import TransactionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -123,15 +124,28 @@ class PersistorAgent(Part1Agent):
             
             self.logger.info(f"   💾 Storing processing_time: {processing_time}s")
             
+            # Convert bayesian_posterior dict to risk score (0.0-1.0)
+            bayesian_data = state.get("bayesian_posterior", {})
+            if isinstance(bayesian_data, dict):
+                # Calculate weighted risk score from probability distribution
+                bayesian_risk = (
+                    bayesian_data.get("low", 0.0) * 0.1 +
+                    bayesian_data.get("medium", 0.0) * 0.4 +
+                    bayesian_data.get("high", 0.0) * 0.7 +
+                    bayesian_data.get("critical", 0.0) * 0.95
+                )
+            else:
+                bayesian_risk = float(bayesian_data) if bayesian_data else 0.0
+            
             compliance_analysis = ComplianceAnalysis(
                 transaction_id=transaction.id,  # Use Transaction UUID, not string ID
                 compliance_score=state.get("risk_score", 0.0),
                 risk_band=risk_band_enum,
                 applicable_rules=state.get("applicable_rules", []),
-                evidence_map=state.get("evidence_summary", {}),
+                evidence_map=state.get("evidence_map", {}),  # Fixed: was "evidence_summary"
                 control_test_results=state.get("control_results", []),
                 pattern_detections=state.get("pattern_scores", {}),
-                bayesian_posterior=state.get("bayesian_posterior", {}).get("posterior_suspicious", 0.0) if isinstance(state.get("bayesian_posterior"), dict) else state.get("bayesian_posterior", 0.0),
+                bayesian_posterior=bayesian_risk,
                 compliance_summary=state.get("analyst_report", ""),
                 analyst_notes=state.get("analyst_notes", ""),
                 processing_time_seconds=processing_time
@@ -141,6 +155,12 @@ class PersistorAgent(Part1Agent):
             records_created.append(f"compliance_analysis:{compliance_analysis.id}")
             self.logger.info(f"Created compliance analysis")
 
+            # Update transaction status to COMPLETED
+            transaction.status = TransactionStatus.COMPLETED
+            transaction.processing_completed_at = datetime.utcnow()
+            db.commit()
+            self.logger.info(f"Updated transaction {transaction_id}")
+
             # 3. Create Alert records if risk is significant
             risk_score = state.get("risk_score", 0.0)
             risk_band_str = state.get("risk_band", "Low")
@@ -148,6 +168,28 @@ class PersistorAgent(Part1Agent):
             if risk_score >= 30:  # Medium or higher
                 from db.models import AlertSeverity, AlertRole, AlertStatus
                 from datetime import timedelta
+                from services.alert_classifier import AlertClassifier
+                
+                # Use AlertClassifier to determine role, type, and remediation workflow
+                classifier = AlertClassifier()
+                
+                role, alert_type, remediation_workflow = classifier.classify_alert(
+                    transaction=state.get("transaction", {}),
+                    risk_score=risk_score,
+                    risk_band=risk_band_str,
+                    control_results=state.get("control_results", []),
+                    pattern_detections=state.get("pattern_scores", {}),
+                    features=state.get("features", {})
+                )
+                
+                # Generate detailed alert description
+                description = classifier.get_alert_description(
+                    transaction_id=transaction_id,
+                    risk_score=risk_score,
+                    risk_band=risk_band_str,
+                    alert_type=alert_type,
+                    control_results=state.get("control_results", [])
+                )
                 
                 # Map risk band to alert severity
                 severity_map = {
@@ -158,7 +200,7 @@ class PersistorAgent(Part1Agent):
                 }
                 severity = severity_map.get(risk_band_str, AlertSeverity.MEDIUM)
                 
-                # Calculate SLA deadline based on severity
+                # Calculate SLA deadline based on severity and role
                 sla_hours = {
                     AlertSeverity.LOW: 72,
                     AlertSeverity.MEDIUM: 48,
@@ -167,16 +209,17 @@ class PersistorAgent(Part1Agent):
                 }
                 sla_deadline = datetime.utcnow() + timedelta(hours=sla_hours.get(severity, 48))
                 
-                # Create alert
+                # Create alert with intelligent classification
                 alert = Alert(
                     alert_id=f"ALR_{transaction_id}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
                     source_type="transaction",
                     transaction_id=transaction.id,  # Use Transaction UUID
-                    role=AlertRole.COMPLIANCE,
+                    role=role,  # Front/Compliance/Legal based on classification
                     severity=severity,
-                    alert_type="transaction_risk",
-                    title=f"Transaction Risk Alert: {risk_band_str}",
-                    description=f"Transaction {transaction_id} flagged with {risk_band_str} risk (score: {risk_score:.2f})",
+                    alert_type=alert_type,  # Specific alert type (e.g., "structuring_pattern")
+                    title=f"{role.value.title()} Team Alert: {alert_type.replace('_', ' ').title()}",
+                    description=description,  # Detailed description with context
+                    remediation_workflow=remediation_workflow,  # Specific step-by-step workflow
                     context={
                         "risk_score": risk_score,
                         "risk_band": risk_band_str,
@@ -193,7 +236,7 @@ class PersistorAgent(Part1Agent):
                 db.add(alert)
                 db.commit()
                 records_created.append(f"alert:{alert.alert_id}")
-                self.logger.info(f"Created alert {alert.alert_id}")
+                self.logger.info(f"Created {role.value} alert {alert.alert_id} - Type: {alert_type}")
 
             # 4. Create Case if risk is Critical
             if risk_score >= 80:

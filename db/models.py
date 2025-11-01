@@ -264,6 +264,7 @@ class Alert(Base):
     alert_type = Column(String(100), nullable=False)
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
+    remediation_workflow = Column(Text)  # Specific remediation workflow for this alert
     
     # Context
     context = Column(JSONB)  # Additional context data

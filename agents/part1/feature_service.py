@@ -67,8 +67,21 @@ class FeatureServiceAgent(Part1Agent):
                 features["avg_amount_7d"] = 0
             
             # Geographic features
-            features["is_cross_border"] = transaction.get("sender_country") != transaction.get("receiver_country")
-            features["is_high_risk_country"] = transaction.get("receiver_country") in ["XX", "YY", "ZZ"]
+            originator_country = transaction.get("originator_country", "")
+            beneficiary_country = transaction.get("beneficiary_country", "")
+            
+            features["is_cross_border"] = originator_country != beneficiary_country
+            
+            # High-risk countries (FATF grey/black lists and common AML concern countries)
+            high_risk_countries = {
+                "AF", "AL", "BB", "BF", "KH", "KY", "CI", "HT", "IR", "IQ", "JM", "JO", 
+                "KP", "LB", "LY", "ML", "MM", "NI", "PK", "PA", "PH", "RU", "SN", "SO",
+                "SS", "SD", "SY", "TT", "TR", "UG", "AE", "VE", "YE", "ZW"
+            }
+            features["is_high_risk_country"] = (
+                beneficiary_country in high_risk_countries or 
+                originator_country in high_risk_countries
+            )
             
             # Structuring indicators
             features["potential_structuring"] = (

@@ -5,8 +5,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import redis
-from qdrant_client import QdrantClient
-
 from db.database import get_db
 from config import settings
 
@@ -44,18 +42,6 @@ async def health_check(db: Session = Depends(get_db)):
     except Exception as e:
         health_status["status"] = "degraded"
         health_status["components"]["redis"] = {"status": "unhealthy", "error": str(e)}
-    
-    # Check Qdrant
-    try:
-        client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
-        collections = client.get_collections()
-        health_status["components"]["qdrant"] = {
-            "status": "healthy",
-            "collections": len(collections.collections)
-        }
-    except Exception as e:
-        health_status["status"] = "degraded"
-        health_status["components"]["qdrant"] = {"status": "unhealthy", "error": str(e)}
     
     return health_status
 

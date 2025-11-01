@@ -66,6 +66,14 @@ def process_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         # Extract results
+        # Calculate processing time in seconds (JSON-serializable)
+        start_time = final_state.get("processing_start_time")
+        end_time = final_state.get("processing_end_time")
+        if start_time and end_time:
+            processing_time_seconds = (end_time - start_time).total_seconds()
+        else:
+            processing_time_seconds = 0.0
+        
         results = {
             "transaction_id": transaction_id,
             "task_id": task_id,
@@ -74,10 +82,7 @@ def process_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
             "risk_band": final_state.get("risk_band"),
             "compliance_summary": final_state.get("compliance_summary"),
             "alerts_generated": final_state.get("alerts_generated", []),
-            "processing_time": (
-                final_state.get("processing_end_time", 0)
-                - final_state.get("processing_start_time", 0)
-            ),
+            "processing_time": processing_time_seconds,  # Now a float, JSON-serializable
             "errors": final_state.get("errors", []),
         }
 

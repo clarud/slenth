@@ -37,19 +37,55 @@ class TransactionSimulator:
     def submit_transaction(self, transaction: dict):
         """Submit a transaction to the API"""
         try:
-            # Transform CSV row to API format
+            # Transform CSV row to API format matching TransactionCreate schema
+            # The CSV already has most fields with correct names, just pass them through
+            
+            # Handle value_date format conversion from DD/M/YYYY to YYYY-MM-DD
+            value_date = transaction.get("value_date", "")
+            if value_date and "/" in value_date:
+                # Parse DD/M/YYYY format and convert to YYYY-MM-DD
+                from datetime import datetime
+                try:
+                    parsed_date = datetime.strptime(value_date, "%d/%m/%Y")
+                    value_date = parsed_date.strftime("%Y-%m-%d")
+                except ValueError:
+                    logger.warning(f"Could not parse value_date: {value_date}, using empty string")
+                    value_date = ""
+            
             payload = {
-                "transaction_type": transaction.get("transaction_type", "transfer"),
+                # Required basic fields - CSV already has these with correct names
+                "transaction_id": transaction.get("transaction_id", f"TXN_{int(time.time())}"),
+                "booking_jurisdiction": transaction.get("booking_jurisdiction", "HK"),
+                "regulator": transaction.get("regulator", "HKMA"),
+                "booking_datetime": transaction.get("booking_datetime", ""),
+                "value_date": value_date,
                 "amount": float(transaction.get("amount", 0)),
                 "currency": transaction.get("currency", "USD"),
-                "sender_account": transaction.get("sender_account", ""),
-                "sender_country": transaction.get("sender_country", "HK"),
-                "receiver_account": transaction.get("receiver_account", ""),
-                "receiver_country": transaction.get("receiver_country", "US"),
-                "purpose": transaction.get("purpose", ""),
-                "timestamp": transaction.get("timestamp", ""),
-                "jurisdiction": transaction.get("jurisdiction", "HK"),
+                "channel": transaction.get("channel", "SWIFT"),
+                "product_type": transaction.get("product_type", "wire_transfer"),
+                
+                # Originator information - CSV already has these with correct names
+                "originator_name": transaction.get("originator_name", "Unknown Sender"),
+                "originator_account": transaction.get("originator_account", ""),
+                "originator_country": transaction.get("originator_country", "HK"),
+                
+                # Beneficiary information - CSV already has these with correct names
+                "beneficiary_name": transaction.get("beneficiary_name", "Unknown Receiver"),
+                "beneficiary_account": transaction.get("beneficiary_account", ""),
+                "beneficiary_country": transaction.get("beneficiary_country", "US"),
+                
+                # SWIFT fields - CSV already has these with correct names
+                "swift_mt": transaction.get("swift_mt") or "MT103",  # Default if empty
+                "swift_f70_purpose": transaction.get("swift_f70_purpose", ""),
+                
+                # Customer fields (required) - CSV already has these with correct names
+                "customer_id": transaction.get("customer_id") or "CUST_UNKNOWN",  # Default if empty
+                "customer_type": transaction.get("customer_type") or "individual",  # Default if empty
+                "customer_risk_rating": transaction.get("customer_risk_rating") or "medium",  # Default if empty
             }
+            
+            logger.info(f"📤 Submitting transaction: {payload['transaction_id']}")
+            logger.debug(f"Payload: {payload}")
             
             response = requests.post(self.endpoint, json=payload)
             response.raise_for_status()
@@ -57,9 +93,18 @@ class TransactionSimulator:
             result = response.json()
             task_id = result.get("task_id")
             
-            logger.info(f"✅ Submitted transaction: task_id={task_id}")
+            logger.info(f"✅ Submitted transaction: {payload['transaction_id']} -> task_id={task_id}")
             return task_id
             
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"❌ HTTP Error submitting transaction: {e}")
+            if e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    logger.error(f"Error details: {error_detail}")
+                except:
+                    logger.error(f"Response text: {e.response.text}")
+            return None
         except Exception as e:
             logger.error(f"❌ Error submitting transaction: {str(e)}")
             return None
@@ -105,6 +150,25 @@ class TransactionSimulator:
         logger.info("="*60)
 
 
+# def main():
+#     """Entry point"""
+#     # Path to CSV file
+#     csv_path = Path(__file__).parent.parent / "transactions_mock_1000_for_participants.csv"
+    
+#     if not csv_path.exists():
+#         logger.error(f"CSV file not found: {csv_path}")
+#         return
+    
+#     # Initialize simulator
+#     simulator = TransactionSimulator(api_base_url="http://localhost:8000")
+    
+#     # Run simulation
+#     # Submit 100 transactions in batches of 10, with 2s delay
+#     simulator.simulate(
+#         csv_path=str(csv_path),
+#         batch_size=10,
+#         delay=2.0
+#     )
 def main():
     """Entry point"""
     # Path to CSV file
@@ -115,16 +179,38 @@ def main():
         return
     
     # Initialize simulator
-    simulator = TransactionSimulator(api_base_url="http://localhost:8000")
+    simulator = TransactionSimulator(api_base_url="http://127.0.0.1:8000")
     
-    # Run simulation
-    # Submit 100 transactions in batches of 10, with 2s delay
-    simulator.simulate(
-        csv_path=str(csv_path),
-        batch_size=10,
-        delay=2.0
-    )
-
+    # Load only first 5 transactions
+    all_transactions = simulator.load_transactions(str(csv_path))
+    first_5_transactions = all_transactions[:50]
+    
+    logger.info(f"Submitting first 50 transactions with 1s intervals...")
+    
+    submitted_count = 0
+    failed_count = 0
+    
+    for i, transaction in enumerate(first_5_transactions, 1):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Transaction {i}/50:")
+        logger.info(f"{'='*60}")
+        
+        task_id = simulator.submit_transaction(transaction)
+        if task_id:
+            submitted_count += 1
+        else:
+            failed_count += 1
+        
+        # Wait 10 seconds before next transaction (except after the last one)
+        if i < len(first_5_transactions):
+            logger.info(f"⏳ Waiting 10 seconds before next transaction...")
+            time.sleep(1)
+    
+    logger.info("\n" + "="*60)
+    logger.info(f"Simulation complete!")
+    logger.info(f"Submitted: {submitted_count}")
+    logger.info(f"Failed: {failed_count}")
+    logger.info("="*60)
 
 if __name__ == "__main__":
     main()
