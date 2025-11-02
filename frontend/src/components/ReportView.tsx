@@ -8,6 +8,7 @@ import DocumentFindings from "@/components/DocumentFindings";
 import { Upload, FileText, AlertTriangle } from "lucide-react";
 import type { TransactionDetail, UploadedDocument, DocumentDetails } from "@/types/api";
 import AlertsModal from "@/components/AlertsModal";
+import { useAuth } from "@/hooks/useAuth";
 
 type TabMode = "compliance" | "upload" | "integration";
 
@@ -26,6 +27,7 @@ const ReportView = ({
   const [documentDetails, setDocumentDetails] = useState<DocumentDetails | undefined>();
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [showAlertsModal, setShowAlertsModal] = useState(false);
+  const { user } = useAuth();
 
   const onDropForTransaction = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -514,6 +516,7 @@ const ReportView = ({
         <AlertsModal
           transactionId={transactionDetail.transaction_id}
           onClose={() => setShowAlertsModal(false)}
+          currentUserRole={user?.role || ""}
         />
       )}
     </div>
