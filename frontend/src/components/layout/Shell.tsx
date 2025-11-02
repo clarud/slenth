@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { BRAND } from "@/config";
 import { motion } from "framer-motion";
+import logo from "@/assets/slenth-logo.png";
 
 const Shell = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();
@@ -18,8 +19,8 @@ const Shell = ({ children }: { children: React.ReactNode }) => {
           <div className="flex h-16 items-center justify-between">
             {/* Logo & Brand */}
             <Link to="/" className="flex items-center gap-3 group">
-              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-                <span className="text-2xl font-bold text-primary">S</span>
+              <div className="h-10 w-10 rounded-lg flex items-center justify-center overflow-hidden">
+                <img src={logo} alt={BRAND.name} className="h-full w-full object-contain" />
               </div>
               <span className="text-xl font-bold text-foreground">{BRAND.name}</span>
             </Link>
