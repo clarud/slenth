@@ -206,12 +206,15 @@ class Document(Base):
     # Metadata
     uploaded_by = Column(String(100))
     customer_id = Column(String(100), index=True)
+    transaction_id = Column(String(255), ForeignKey('transactions.transaction_id'), nullable=True, index=True)  # Link to Part 1 transaction
+    workflow_metadata = Column(JSONB)  # Store workflow results and findings (renamed from metadata to avoid SQLAlchemy conflict)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     findings = relationship("DocumentFinding", back_populates="document")
     alerts = relationship("Alert", back_populates="document")
+    transaction = relationship("Transaction", backref="documents")
 
 
 class DocumentFinding(Base):
@@ -228,13 +231,15 @@ class DocumentFinding(Base):
     finding_category = Column(String(100))
     finding_severity = Column(SQLEnum(AlertSeverity))
     finding_description = Column(Text)
-    finding_data = Column(JSONB)  # Detailed finding data
+    finding_data = Column(JSONB)  # Detailed finding data (legacy)
+    finding_details = Column(JSONB)  # Complete finding object from workflow
     
     # Evidence
     evidence_location = Column(String(500))  # File path or coordinates
     confidence_score = Column(Float)
     
     # Metadata
+    detected_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     # Relationships

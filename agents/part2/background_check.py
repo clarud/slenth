@@ -134,6 +134,24 @@ class BackgroundCheckAgent(Part2Agent):
         state["sanctions_found"] = sanctions_found
         state["background_risk_score"] = background_risk_score
         state["screened_entities"] = screened_entities
+        
+        # NEW: Add findings to background_check_findings list for workflow state
+        # Convert results to findings format
+        background_findings = []
+        for result in background_check_results:
+            if result.get("is_pep") or result.get("is_sanctioned") or result.get("matches"):
+                finding = {
+                    "type": "background_check",
+                    "severity": "critical" if result.get("is_sanctioned") else "high" if result.get("is_pep") else "medium",
+                    "entity": result.get("name"),
+                    "is_pep": result.get("is_pep", False),
+                    "is_sanctioned": result.get("is_sanctioned", False),
+                    "matches": result.get("matches", []),
+                    "sources": result.get("sources", [])
+                }
+                background_findings.append(finding)
+        state["background_check_findings"] = background_findings
+        
         state["errors"] = errors
         state["background_check_executed"] = True
 

@@ -225,6 +225,10 @@ Respond in JSON format with consistency_score, contradictions, and calculation_e
         state["contradictions"] = contradictions
         state["semantic_issues"] = semantic_issues
         state["timeline_issues"] = timeline_issues
+        
+        # NEW: Add findings to content_findings list for workflow state
+        state["content_findings"] = semantic_issues  # Map semantic_issues to content_findings
+        
         state["errors"] = errors
         state["nlp_validation_executed"] = True
 

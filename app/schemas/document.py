@@ -16,6 +16,7 @@ class DocumentUploadResponse(BaseModel):
     file_size: int
     file_type: str
     status: str = Field(default="processing", description="Processing status")
+    transaction_id: Optional[str] = Field(None, description="Linked transaction ID from Part 1")
     uploaded_at: datetime
     
     # Processing results (available immediately since Part 2 is synchronous)
@@ -23,6 +24,11 @@ class DocumentUploadResponse(BaseModel):
     risk_level: Optional[str] = Field(None, description="Low, Medium, High, Critical")
     processing_completed_at: Optional[datetime] = None
     processing_time_seconds: Optional[float] = None
+    
+    # Findings summary
+    total_findings: Optional[int] = Field(None, description="Total number of findings")
+    findings_summary: Optional[Dict[str, int]] = Field(None, description="Findings breakdown by type")
+    report_path: Optional[str] = Field(None, description="Path to generated PDF report")
 
     class Config:
         json_schema_extra = {
@@ -30,13 +36,23 @@ class DocumentUploadResponse(BaseModel):
                 "document_id": "DOC-2024-001",
                 "filename": "purchase_agreement.pdf",
                 "file_size": 2048576,
-                "file_type": "application/pdf",
+                "file_type": "pdf",
                 "status": "completed",
+                "transaction_id": "TXN-20241101-001",
                 "uploaded_at": "2024-11-01T10:30:00Z",
                 "risk_score": 45.0,
                 "risk_level": "Medium",
                 "processing_completed_at": "2024-11-01T10:30:15Z",
                 "processing_time_seconds": 15.2,
+                "total_findings": 8,
+                "findings_summary": {
+                    "format": 2,
+                    "content": 3,
+                    "image_forensics": 1,
+                    "background_check": 1,
+                    "cross_reference": 1
+                },
+                "report_path": "/uploads/reports/DOC-2024-001_report.pdf"
             }
         }
 

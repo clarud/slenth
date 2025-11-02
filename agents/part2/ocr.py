@@ -167,17 +167,42 @@ class OCRAgent(Part2Agent):
         for page_num in range(len(doc)):
             page = doc[page_num]
             
-            # Try to extract text from PDF text layer first
+            # Try multiple extraction methods
             page_text = page.get_text("text")
+            extraction_method = "pdf_text_layer"
             
-            # If no text found and page has images, try OCR
+            self.logger.info(
+                f"Page {page_num + 1}: Extracted {len(page_text)} chars from text layer, "
+                f"has {len(page.get_images())} images"
+            )
+            
+            # If minimal text, try extracting from all methods
+            if len(page_text.strip()) < 100:
+                # Try different extraction modes
+                for method in ["text", "blocks", "dict", "rawdict"]:
+                    try:
+                        alt_text = page.get_text(method)
+                        if isinstance(alt_text, str) and len(alt_text) > len(page_text):
+                            page_text = alt_text
+                            extraction_method = f"pdf_{method}"
+                            self.logger.info(f"Better extraction with method '{method}': {len(page_text)} chars")
+                    except:
+                        pass
+            
+            # If still no text and page has images, try OCR
             if len(page_text.strip()) < 50 and page.get_images():
                 self.logger.info(
-                    f"Page {page_num + 1} has minimal text, attempting OCR on images"
+                    f"Page {page_num + 1} has minimal text, attempting OCR on {len(page.get_images())} images"
                 )
-                ocr_page_text = self._ocr_page_images(page, page_num)
-                if ocr_page_text:
-                    page_text = ocr_page_text
+                if self.reader:
+                    ocr_page_text = self._ocr_page_images(page, page_num)
+                    if ocr_page_text and len(ocr_page_text) > len(page_text):
+                        page_text = ocr_page_text
+                        extraction_method = "easyocr"
+                        self.logger.info(f"OCR extracted {len(ocr_page_text)} chars")
+                else:
+                    self.logger.warning("EasyOCR not available - cannot OCR scanned pages")
+                    extraction_method = "no_ocr_available"
             
             # Clean the text
             page_text = self._clean_text(page_text)
@@ -186,7 +211,7 @@ class OCRAgent(Part2Agent):
                 "page_number": page_num + 1,
                 "text": page_text,
                 "char_count": len(page_text),
-                "method": "pdf_text_layer" if len(page.get_text("text").strip()) >= 50 else "easyocr"
+                "method": extraction_method
             })
 
         doc.close()
@@ -196,6 +221,10 @@ class OCRAgent(Part2Agent):
             f"[Page {p['page_number']}]\n{p['text']}" 
             for p in page_texts
         ])
+        
+        self.logger.info(
+            f"Total text extracted: {len(ocr_text)} characters from {len(page_texts)} pages"
+        )
         
         return ocr_text, page_texts
 

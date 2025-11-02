@@ -293,6 +293,10 @@ class FormatValidationAgent(Part2Agent):
         state["completeness_score"] = max(0, min(100, completeness_score))
         state["format_issues"] = format_issues
         state["format_quality_score"] = format_quality_score
+        
+        # NEW: Add findings to format_findings list for workflow state
+        state["format_findings"] = format_issues  # Map format_issues to format_findings
+        
         state["errors"] = errors
         state["format_validation_executed"] = True
 
