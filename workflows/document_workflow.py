@@ -63,7 +63,7 @@ def create_document_workflow(
     document_intake = DocumentIntakeAgent()
     ocr = OCRAgent()
     format_validation = FormatValidationAgent()
-    nlp_validation = NLPValidationAgent()
+    nlp_validation = NLPValidationAgent(llm_service=llm_service)
     image_forensics = ImageForensicsAgent()
     background_check = BackgroundCheckAgent()
     cross_reference = CrossReferenceAgent(db_session)
