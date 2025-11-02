@@ -85,7 +85,8 @@ def create_document_workflow(
         workflow.add_node("background_check", background_check.execute)
     
     workflow.add_node("cross_reference", cross_reference.execute)
-    workflow.add_node("document_risk", document_risk.execute)
+    # DocumentRisk removed - not compatible with Part2 state structure
+    # ReportGenerator will calculate risk from findings instead
     workflow.add_node("report_generator", report_generator.execute)
     workflow.add_node("evidence_storekeeper", evidence_storekeeper.execute)
 
@@ -106,8 +107,8 @@ def create_document_workflow(
         workflow.add_edge("image_forensics", "background_check")
         workflow.add_edge("background_check", "cross_reference")
     
-    workflow.add_edge("cross_reference", "document_risk")
-    workflow.add_edge("document_risk", "report_generator")
+    # Go directly from CrossReference to ReportGenerator (skip DocumentRisk)
+    workflow.add_edge("cross_reference", "report_generator")
     workflow.add_edge("report_generator", "evidence_storekeeper")
 
     # End workflow

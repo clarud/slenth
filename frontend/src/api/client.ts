@@ -5,6 +5,7 @@ import type {
   TransactionStatus,
   ComplianceReport,
   UploadedDocument,
+  DocumentDetails,
   RulesResponse,
   RulesFilters,
   InternalRulesPayload,
@@ -53,6 +54,13 @@ export const uploadDocument = async (
   const { data } = await api.post(API.DOCUMENT_UPLOAD_PATH, formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+  return data;
+};
+
+export const fetchDocumentDetails = async (
+  documentId: string
+): Promise<DocumentDetails> => {
+  const { data } = await api.get(`/documents/${documentId}/findings`);
   return data;
 };
 

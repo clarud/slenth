@@ -1,16 +1,19 @@
 import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
-import { uploadDocument } from "@/api/client";
+import { uploadDocument, fetchDocumentDetails } from "@/api/client";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import Shell from "@/components/layout/Shell";
 import Spinner from "@/components/ui/Spinner";
+import DocumentFindings from "@/components/DocumentFindings";
 import { Upload as UploadIcon, FileText, CheckCircle } from "lucide-react";
-import type { UploadedDocument } from "@/types/api";
+import type { UploadedDocument, DocumentDetails } from "@/types/api";
 
 const Upload = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadedDoc, setUploadedDoc] = useState<UploadedDocument>();
+  const [documentDetails, setDocumentDetails] = useState<DocumentDetails>();
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -22,11 +25,25 @@ const Upload = () => {
     }
 
     setUploading(true);
+    setDocumentDetails(undefined);
+    
     try {
       // Upload without transaction_id for standalone document analysis
       const doc = await uploadDocument(file);
       setUploadedDoc(doc);
       toast.success("Document uploaded and analyzed successfully");
+      
+      // Fetch detailed findings
+      setLoadingDetails(true);
+      try {
+        const details = await fetchDocumentDetails(doc.document_id);
+        setDocumentDetails(details);
+      } catch (error) {
+        console.error("Failed to fetch document details:", error);
+        toast.error("Could not load detailed findings");
+      } finally {
+        setLoadingDetails(false);
+      }
     } catch (error) {
       toast.error("Failed to upload document");
       console.error(error);
@@ -157,13 +174,13 @@ const Upload = () => {
                     <div>
                       <p className="text-sm text-muted-foreground">Risk Level</p>
                       <span className={`badge ${getRiskBadgeClass(uploadedDoc.risk_level)}`}>
-                        {uploadedDoc.risk_level}
+                        {uploadedDoc.risk_level || "N/A"}
                       </span>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Risk Score</p>
                       <p className="font-medium text-foreground">
-                        {uploadedDoc.risk_score}
+                        {uploadedDoc.risk_score || "N/A"}
                       </p>
                     </div>
                     <div className="col-span-2">
@@ -174,14 +191,19 @@ const Upload = () => {
                     </div>
                   </div>
 
-                  {uploadedDoc.report_text && (
-                    <div>
-                      <p className="text-sm font-semibold text-foreground mb-2">Analysis Report</p>
-                      <div className="card p-4">
-                        <p className="text-sm text-foreground whitespace-pre-wrap">
-                          {uploadedDoc.report_text}
-                        </p>
-                      </div>
+                  {/* Agent Findings */}
+                  {loadingDetails ? (
+                    <div className="flex items-center justify-center p-8">
+                      <Spinner size="lg" />
+                      <span className="ml-3 text-sm text-muted-foreground">
+                        Loading detailed findings...
+                      </span>
+                    </div>
+                  ) : documentDetails?.workflow_metadata ? (
+                    <DocumentFindings metadata={documentDetails.workflow_metadata} />
+                  ) : (
+                    <div className="card p-4 text-center text-muted-foreground">
+                      <p>No detailed findings available</p>
                     </div>
                   )}
                 </motion.div>

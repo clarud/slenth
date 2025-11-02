@@ -1,11 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
-import { uploadDocument } from "@/api/client";
+import { uploadDocument, fetchDocumentDetails } from "@/api/client";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import Spinner from "@/components/ui/Spinner";
+import DocumentFindings from "@/components/DocumentFindings";
 import { Upload, FileText, AlertTriangle } from "lucide-react";
-import type { TransactionDetail, UploadedDocument } from "@/types/api";
+import type { TransactionDetail, UploadedDocument, DocumentDetails } from "@/types/api";
 import AlertsModal from "@/components/AlertsModal";
 
 type TabMode = "compliance" | "upload" | "integration";
@@ -22,6 +23,8 @@ const ReportView = ({
   const [activeTab, setActiveTab] = useState<TabMode>("compliance");
   const [uploadingForTransaction, setUploadingForTransaction] = useState(false);
   const [uploadedDocument, setUploadedDocument] = useState<UploadedDocument | undefined>();
+  const [documentDetails, setDocumentDetails] = useState<DocumentDetails | undefined>();
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [showAlertsModal, setShowAlertsModal] = useState(false);
 
   const onDropForTransaction = useCallback(async (acceptedFiles: File[]) => {
@@ -35,11 +38,25 @@ const ReportView = ({
     }
 
     setUploadingForTransaction(true);
+    setDocumentDetails(undefined);
+    
     try {
       const doc = await uploadDocument(file, transactionDetail.transaction_id);
       setUploadedDocument(doc);
       setActiveTab("upload"); // Switch to upload tab to show results
       toast.success(`Document uploaded and processed successfully`);
+      
+      // Fetch detailed findings
+      setLoadingDetails(true);
+      try {
+        const details = await fetchDocumentDetails(doc.document_id);
+        setDocumentDetails(details);
+      } catch (error) {
+        console.error("Failed to fetch document details:", error);
+        toast.error("Could not load detailed findings");
+      } finally {
+        setLoadingDetails(false);
+      }
     } catch (error) {
       toast.error("Failed to upload document");
       console.error(error);
@@ -393,36 +410,54 @@ const ReportView = ({
 
             {/* Show uploaded document result if available */}
             {uploadedDocument && (
-              <div className="mt-4">
-                <p className="text-sm font-semibold text-foreground mb-3">Document Analysis Result</p>
+              <div className="mt-4 space-y-4">
+                <p className="text-sm font-semibold text-foreground">Document Analysis Result</p>
+                
+                {/* Basic Info */}
                 <div className="card p-4">
-                  <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
                       <p className="text-sm text-muted-foreground">Document ID</p>
                       <p className="font-medium text-foreground text-xs">{uploadedDocument.document_id}</p>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Filename</p>
-                      <p className="font-medium text-foreground text-xs">{uploadedDocument.filename}</p>
+                      <p className="font-medium text-foreground text-xs truncate">{uploadedDocument.filename}</p>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Risk Level</p>
                       <span className={`badge ${getRiskBadgeClass(uploadedDocument.risk_level)}`}>
-                        {uploadedDocument.risk_level}
+                        {uploadedDocument.risk_level || "N/A"}
                       </span>
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Risk Score</p>
-                      <p className="font-medium text-foreground">{uploadedDocument.risk_score}</p>
+                      <p className="font-medium text-foreground">{uploadedDocument.risk_score || "N/A"}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-sm text-muted-foreground">Processed At</p>
+                      <p className="font-medium text-foreground text-xs">
+                        {new Date(uploadedDocument.processing_completed_at).toLocaleString()}
+                      </p>
                     </div>
                   </div>
-                  {uploadedDocument.report_text && (
-                    <div>
-                      <p className="text-sm text-muted-foreground mb-2">Report</p>
-                      <p className="text-sm text-foreground whitespace-pre-wrap">{uploadedDocument.report_text}</p>
-                    </div>
-                  )}
                 </div>
+
+                {/* Detailed Findings */}
+                {loadingDetails ? (
+                  <div className="flex items-center justify-center p-8">
+                    <Spinner size="lg" />
+                    <span className="ml-3 text-sm text-muted-foreground">
+                      Loading detailed findings...
+                    </span>
+                  </div>
+                ) : documentDetails?.workflow_metadata ? (
+                  <DocumentFindings metadata={documentDetails.workflow_metadata} />
+                ) : (
+                  <div className="card p-4 text-center text-muted-foreground">
+                    <p>No detailed findings available</p>
+                  </div>
+                )}
               </div>
             )}
           </motion.div>

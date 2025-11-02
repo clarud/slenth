@@ -71,6 +71,33 @@ export interface UploadedDocument {
   report_text?: string;
 }
 
+export interface DocumentDetails extends UploadedDocument {
+  workflow_metadata?: {
+    total_findings?: number;
+    processing_time_seconds?: number;
+    ocr_text_length?: number;
+    pages_processed?: number;
+    workflow_state?: {
+      format_findings?: Array<{
+        type: string;
+        severity: string;
+        description: string;
+        confidence?: number;
+      }>;
+      content_findings?: string[];
+      image_findings?: Array<{
+        type: string;
+        severity: string;
+        description: string;
+        confidence?: number;
+      }>;
+      background_check_findings?: any[];
+      cross_reference_findings?: any[];
+      risk_factors?: string[];
+    };
+  };
+}
+
 // Rule Types
 export type RuleType = "internal" | "external";
 export type Regulator = "HKMA" | "MAS" | "FINMA";

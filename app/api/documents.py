@@ -165,7 +165,7 @@ async def upload_document(
 
         # Update document record with results
         db_document.status = DocumentStatus.COMPLETED
-        db_document.risk_score = final_state.get("risk_score")
+        db_document.risk_score = final_state.get("overall_risk_score")  # Fixed: agent outputs "overall_risk_score"
         db_document.risk_band = final_state.get("risk_band")
         db_document.processing_completed_at = datetime.utcnow()
         db_document.workflow_metadata = {
@@ -180,6 +180,8 @@ async def upload_document(
                 "background_check_findings": final_state.get("background_check_findings", []),
                 "cross_reference_findings": final_state.get("cross_reference_findings", []),
                 "risk_factors": final_state.get("risk_factors", []),
+                "overall_risk_score": final_state.get("overall_risk_score"),
+                "risk_band": final_state.get("risk_band"),
                 "report_path": final_state.get("report_path"),
             }
         }
@@ -396,7 +398,7 @@ async def get_document_findings(
         db: Database session
 
     Returns:
-        Detailed findings
+        Detailed findings including full workflow metadata
     """
     document = db.query(Document).filter(Document.document_id == document_id).first()
 
@@ -406,21 +408,23 @@ async def get_document_findings(
             detail=f"Document {document_id} not found",
         )
 
-    # Get findings from workflow_metadata (in production, would query document_findings table)
-    workflow_meta = document.workflow_metadata or {}
-    findings = workflow_meta.get("findings", {})
-
+    # Return full document data including workflow_metadata
     return DocumentFindingsResponse(
         document_id=document_id,
-        ocr_text=findings.get("ocr_text", "")[:1000],  # Truncate for API
-        ocr_confidence=findings.get("ocr_confidence", 0.0),
-        pages_processed=workflow_meta.get("pages_processed", 0),
-        format_findings=[],  # Would load from database
+        filename=document.filename,
+        risk_level=document.risk_band,
+        risk_score=document.risk_score,
+        processing_completed_at=document.processing_completed_at.isoformat() if document.processing_completed_at else None,
+        workflow_metadata=document.workflow_metadata or {},
+        ocr_text="",  # Not needed in response
+        ocr_confidence=0.0,
+        pages_processed=document.workflow_metadata.get("pages_processed", 0) if document.workflow_metadata else 0,
+        format_findings=[],
         content_findings=[],
         image_findings=[],
         background_check_findings=[],
         cross_reference_findings=[],
-        extracted_entities=findings.get("extracted_entities", {}),
+        extracted_entities={},
         report_url=f"/documents/{document_id}/report",
     )
 

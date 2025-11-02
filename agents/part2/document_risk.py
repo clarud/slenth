@@ -45,8 +45,8 @@ class DocumentRiskAgent(Part2Agent):
           - overall_risk_score, risk_band, component_scores, risk_factors,
             recommendations, requires_manual_review
         """
-        self.logger.info("Executing DocumentRiskAgent")
-
+        self.logger.info("🔍 === EXECUTING DocumentRiskAgent ===")
+        
         errors: List[str] = state.get("errors", [])
 
         # Initialize results
@@ -58,9 +58,18 @@ class DocumentRiskAgent(Part2Agent):
         requires_manual_review = False
 
         try:
+            self.logger.info("DEBUG: Collecting component scores...")
             component_scores = self._collect_component_scores(state)
+            self.logger.info(f"DEBUG: Component scores: {component_scores}")
+            
+            self.logger.info("DEBUG: Calculating weighted risk...")
             overall_risk_score = self._calculate_weighted_risk(component_scores)
+            self.logger.info(f"DEBUG: Overall risk score: {overall_risk_score}")
+            
+            self.logger.info("DEBUG: Determining risk band...")
             risk_band = self._determine_risk_band(overall_risk_score)
+            self.logger.info(f"DEBUG: Risk band: {risk_band}")
+            
             risk_factors = self._extract_risk_factors(state, component_scores)
             recommendations = self._generate_recommendations(risk_band, risk_factors)
             requires_manual_review = (
@@ -68,13 +77,14 @@ class DocumentRiskAgent(Part2Agent):
                 or any(f.get("severity") in {"high", "critical"} for f in risk_factors)
             )
         except Exception as e:
-            self.logger.error(f"Document risk assessment error: {e}")
+            self.logger.error(f"❌ Document risk assessment error: {e}", exc_info=True)
             errors.append(f"document_risk_error: {str(e)}")
             overall_risk_score = 100.0
             risk_band = "CRITICAL"
             requires_manual_review = True
 
         # Update state
+        self.logger.info(f"✅ Setting state: overall_risk_score={overall_risk_score}, risk_band={risk_band}")
         state["overall_risk_score"] = overall_risk_score
         state["risk_band"] = risk_band
         state["component_scores"] = component_scores
@@ -84,6 +94,7 @@ class DocumentRiskAgent(Part2Agent):
         state["errors"] = errors
         state["document_risk_executed"] = True
 
+        self.logger.info(f"🎯 DocumentRiskAgent complete - Score: {overall_risk_score}, Band: {risk_band}")
         return state
 
     def _collect_component_scores(self, state: Dict[str, Any]) -> Dict[str, float]:

@@ -127,6 +127,11 @@ class DocumentFindingsResponse(BaseModel):
     """Detailed findings from document processing."""
 
     document_id: str
+    filename: Optional[str] = None
+    risk_level: Optional[str] = None
+    risk_score: Optional[float] = None
+    processing_completed_at: Optional[str] = None
+    workflow_metadata: Optional[Dict[str, Any]] = None
     
     # OCR results
     ocr_text: str
