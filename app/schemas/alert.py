@@ -19,6 +19,7 @@ class AlertResponse(BaseModel):
     status: str = Field(..., description="pending, acknowledged, escalated, resolved")
     source_type: str = Field(..., description="transaction, document")
     source_id: str
+    remediation_workflow: Optional[str] = None
     sla_deadline: datetime
     metadata: Dict[str, Any]
     created_at: datetime
@@ -40,6 +41,7 @@ class AlertResponse(BaseModel):
                 "status": "pending",
                 "source_type": "transaction",
                 "source_id": "TXN-2024-001",
+                "remediation_workflow": "Request additional documentation from customer",
                 "sla_deadline": "2024-11-03T10:30:00Z",
                 "metadata": {
                     "transaction_amount": 100000.00,

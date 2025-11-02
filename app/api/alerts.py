@@ -59,13 +59,13 @@ async def list_alerts(
                 role=alert.role.value,
                 status=alert.status.value,
                 source_type=alert.source_type,
-                source_id=alert.source_id,
+                source_id=str(alert.transaction_id) if alert.transaction_id else str(alert.document_id),
+                remediation_workflow=alert.remediation_workflow,
                 sla_deadline=alert.sla_deadline,
-                metadata=alert.metadata,
+                metadata=alert.context or {},
                 created_at=alert.created_at,
                 acknowledged_at=alert.acknowledged_at,
                 acknowledged_by=alert.acknowledged_by,
-                escalated_at=alert.escalated_at,
                 resolved_at=alert.resolved_at,
                 resolved_by=alert.resolved_by,
                 sla_breached=(alert.sla_deadline < datetime.utcnow() if alert.sla_deadline else False),
@@ -99,13 +99,13 @@ async def get_alert(
         role=alert.role.value,
         status=alert.status.value,
         source_type=alert.source_type,
-        source_id=alert.source_id,
+        source_id=str(alert.transaction_id) if alert.transaction_id else str(alert.document_id),
+        remediation_workflow=alert.remediation_workflow,
         sla_deadline=alert.sla_deadline,
-        metadata=alert.metadata,
+        metadata=alert.context or {},
         created_at=alert.created_at,
         acknowledged_at=alert.acknowledged_at,
         acknowledged_by=alert.acknowledged_by,
-        escalated_at=alert.escalated_at,
         resolved_at=alert.resolved_at,
         resolved_by=alert.resolved_by,
         sla_breached=(alert.sla_deadline < datetime.utcnow() if alert.sla_deadline else False),
@@ -135,13 +135,13 @@ async def acknowledge_alert(
             role=alert.role.value,
             status=alert.status.value,
             source_type=alert.source_type,
-            source_id=alert.source_id,
+            source_id=str(alert.transaction_id) if alert.transaction_id else str(alert.document_id),
+            remediation_workflow=alert.remediation_workflow,
             sla_deadline=alert.sla_deadline,
-            metadata=alert.metadata,
+            metadata=alert.context or {},
             created_at=alert.created_at,
             acknowledged_at=alert.acknowledged_at,
             acknowledged_by=alert.acknowledged_by,
-            escalated_at=alert.escalated_at,
             resolved_at=alert.resolved_at,
             resolved_by=alert.resolved_by,
             sla_breached=(alert.sla_deadline < datetime.utcnow()),
@@ -191,3 +191,105 @@ async def get_dashboard_stats(
         recent_critical=[],
         recent_high=[],
     )
+
+
+@router.get("/transaction/{transaction_id}", response_model=AlertListResponse)
+async def get_transaction_alerts(
+    transaction_id: str,
+    db: Session = Depends(get_db),
+) -> AlertListResponse:
+    """Get all alerts for a specific transaction."""
+    from db.models import Transaction
+    
+    # First get the transaction by transaction_id string
+    transaction = db.query(Transaction).filter(Transaction.transaction_id == transaction_id).first()
+    
+    if not transaction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transaction {transaction_id} not found",
+        )
+    
+    # Get all alerts for this transaction using the UUID
+    alerts = db.query(Alert).filter(Alert.transaction_id == transaction.id).order_by(Alert.created_at.desc()).all()
+    
+    return AlertListResponse(
+        total=len(alerts),
+        alerts=[
+            AlertResponse(
+                alert_id=alert.alert_id,
+                title=alert.title,
+                description=alert.description,
+                severity=alert.severity.value,
+                role=alert.role.value,
+                status=alert.status.value,
+                source_type=alert.source_type,
+                source_id=str(alert.transaction_id) if alert.transaction_id else str(alert.document_id),
+                remediation_workflow=alert.remediation_workflow,
+                sla_deadline=alert.sla_deadline,
+                metadata={
+                    "context": alert.context,
+                    "evidence": alert.evidence,
+                },
+                created_at=alert.created_at,
+                acknowledged_at=alert.acknowledged_at,
+                acknowledged_by=alert.acknowledged_by,
+                resolved_at=alert.resolved_at,
+                resolved_by=alert.resolved_by,
+                sla_breached=(alert.sla_deadline < datetime.utcnow() if alert.sla_deadline else False),
+            )
+            for alert in alerts
+        ],
+        page=1,
+        page_size=len(alerts),
+    )
+
+
+@router.post("/{alert_id}/remediation/trigger", response_model=dict)
+async def trigger_remediation_workflow(
+    alert_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Trigger remediation workflow for an alert (placeholder implementation)."""
+    alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
+    
+    if not alert:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Alert {alert_id} not found",
+        )
+    
+    # Placeholder: In production, this would trigger actual remediation workflow
+    logger.info(f"Remediation workflow triggered for alert {alert_id}")
+    
+    return {
+        "success": True,
+        "message": f"Remediation workflow has been triggered for alert {alert_id}",
+        "alert_id": alert_id,
+        "workflow_status": "triggered"
+    }
+
+
+@router.post("/{alert_id}/remediation/reject", response_model=dict)
+async def reject_remediation_workflow(
+    alert_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reject remediation workflow for an alert (placeholder implementation)."""
+    alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
+    
+    if not alert:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Alert {alert_id} not found",
+        )
+    
+    # Placeholder: In production, this would update alert status
+    logger.info(f"Remediation workflow rejected for alert {alert_id}")
+    
+    return {
+        "success": True,
+        "message": f"Remediation workflow has been rejected for alert {alert_id}",
+        "alert_id": alert_id,
+        "workflow_status": "rejected"
+    }

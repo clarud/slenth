@@ -77,6 +77,11 @@ async def list_transactions(
     # Convert to response format
     result = []
     for txn in transactions:
+        # Get risk_band from compliance analysis if available
+        risk_band = None
+        if txn.compliance_analysis:
+            risk_band = txn.compliance_analysis.risk_band.value if txn.compliance_analysis.risk_band else None
+        
         result.append({
             "transaction_id": txn.transaction_id,
             "status": txn.status.value if txn.status else "unknown",
@@ -86,6 +91,7 @@ async def list_transactions(
             "beneficiary_country": txn.beneficiary_country,
             "created_at": txn.created_at.isoformat() if txn.created_at else None,
             "processing_completed_at": txn.processing_completed_at.isoformat() if txn.processing_completed_at else None,
+            "risk_band": risk_band,
         })
     
     return result
