@@ -2,7 +2,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { X, Plus } from "lucide-react";
+import { X, Plus, Shield } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 import type { RulesFilters as FiltersType } from "@/types/api";
 
 interface RulesFiltersProps {
@@ -13,6 +14,8 @@ interface RulesFiltersProps {
 }
 
 const RulesFilters = ({ filters, onChange, onReset, onAddRules }: RulesFiltersProps) => {
+  const { canManageInternalRules } = useAuth();
+
   return (
     <div className="card p-4 space-y-4 sticky top-20 z-10 bg-card/95 backdrop-blur-sm">
       <div className="flex items-center justify-between gap-4">
@@ -24,10 +27,19 @@ const RulesFilters = ({ filters, onChange, onReset, onAddRules }: RulesFiltersPr
             className="w-full"
           />
         </div>
-        <button onClick={onAddRules} className="btn-primary whitespace-nowrap">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Internal Rules
-        </button>
+        {canManageInternalRules() ? (
+          <button onClick={onAddRules} className="btn-primary whitespace-nowrap">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Internal Rules
+          </button>
+        ) : (
+          <div className="bg-yellow-50 border border-yellow-200 px-4 py-2 rounded-lg">
+            <div className="flex items-center gap-2 text-sm text-yellow-800">
+              <Shield className="w-4 h-4" />
+              <span>Only compliance officers can manage internal rules</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

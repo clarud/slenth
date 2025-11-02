@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { X, AlertTriangle, CheckCircle2, XCircle, Clock, Shield } from "lucide-react";
+import { X, AlertTriangle, CheckCircle2, XCircle, Clock, Shield, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Alert, RemediationResponse } from "@/types/api";
 import {
@@ -11,9 +11,10 @@ import {
 interface AlertsModalProps {
   transactionId: string;
   onClose: () => void;
+  currentUserRole: string;
 }
 
-const AlertsModal = ({ transactionId, onClose }: AlertsModalProps) => {
+const AlertsModal = ({ transactionId, onClose, currentUserRole }: AlertsModalProps) => {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +138,16 @@ const AlertsModal = ({ transactionId, onClose }: AlertsModalProps) => {
     return new Date(dateString).toLocaleString();
   };
 
+  // Check if current user can manage this alert
+  const canManageAlert = (alertRole: string): boolean => {
+    // Super user can manage all alerts
+    if (currentUserRole === "super") {
+      return true;
+    }
+    // Users can only manage alerts for their own role
+    return alertRole === currentUserRole;
+  };
+
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -202,10 +213,15 @@ const AlertsModal = ({ transactionId, onClose }: AlertsModalProps) => {
 
             {!loading && !error && alerts.length > 0 && (
               <div className="space-y-4">
-                {alerts.map((alert) => (
+                {alerts.map((alert) => {
+                  const canManage = canManageAlert(alert.role);
+                  
+                  return (
                   <div
                     key={alert.alert_id}
-                    className={`border rounded-lg p-5 ${getSeverityColor(alert.severity)}`}
+                    className={`border rounded-lg p-5 ${getSeverityColor(alert.severity)} ${
+                      !canManage ? "opacity-80" : ""
+                    }`}
                   >
                     {/* Alert Header */}
                     <div className="flex items-start justify-between mb-3">
@@ -219,6 +235,12 @@ const AlertsModal = ({ transactionId, onClose }: AlertsModalProps) => {
                           >
                             {alert.role.toUpperCase()}
                           </span>
+                          {!canManage && (
+                            <span className="px-2 py-1 text-xs font-semibold rounded bg-gray-200 text-gray-700 border border-gray-300 flex items-center gap-1">
+                              <Lock className="w-3 h-3" />
+                              Read Only
+                            </span>
+                          )}
                           <span
                             className={`px-2 py-1 text-xs font-semibold rounded ${getStatusColor(
                               alert.status
@@ -278,39 +300,59 @@ const AlertsModal = ({ transactionId, onClose }: AlertsModalProps) => {
                     )}
 
                     {/* Remediation Actions */}
-                    {workflowStatus[alert.alert_id] ? (
-                      <div
-                        className={`p-3 rounded ${
-                          workflowStatus[alert.alert_id]?.workflow_status ===
-                          "triggered"
-                            ? "bg-green-100 border border-green-300"
-                            : "bg-red-100 border border-red-300"
-                        }`}
-                      >
-                        <p className="font-semibold text-sm">
-                          {workflowStatus[alert.alert_id]?.message}
-                        </p>
-                      </div>
+                    {canManage ? (
+                      // User can manage this alert
+                      workflowStatus[alert.alert_id] ? (
+                        <div
+                          className={`p-3 rounded ${
+                            workflowStatus[alert.alert_id]?.workflow_status ===
+                            "triggered"
+                              ? "bg-green-100 border border-green-300"
+                              : "bg-red-100 border border-red-300"
+                          }`}
+                        >
+                          <p className="font-semibold text-sm">
+                            {workflowStatus[alert.alert_id]?.message}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleTriggerWorkflow(alert.alert_id)}
+                            className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors flex items-center justify-center gap-2"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Trigger Remediation Workflow
+                          </button>
+                          <button
+                            onClick={() => handleRejectWorkflow(alert.alert_id)}
+                            className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium transition-colors flex items-center justify-center gap-2"
+                          >
+                            <XCircle className="w-4 h-4" />
+                            Reject Remediation Workflow
+                          </button>
+                        </div>
+                      )
                     ) : (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleTriggerWorkflow(alert.alert_id)}
-                          className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-colors flex items-center justify-center gap-2"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          Trigger Remediation Workflow
-                        </button>
-                        <button
-                          onClick={() => handleRejectWorkflow(alert.alert_id)}
-                          className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium transition-colors flex items-center justify-center gap-2"
-                        >
-                          <XCircle className="w-4 h-4" />
-                          Reject Remediation Workflow
-                        </button>
+                      // User cannot manage this alert (read-only)
+                      <div className="bg-gray-100 p-3 rounded border border-gray-300">
+                        <div className="flex items-center gap-2 text-gray-700">
+                          <Lock className="w-4 h-4" />
+                          {workflowStatus[alert.alert_id] ? (
+                            <span className="text-sm font-medium">
+                              Status: {workflowStatus[alert.alert_id]?.workflow_status === "triggered" ? "✓ Triggered" : "✗ Rejected"}
+                            </span>
+                          ) : (
+                            <span className="text-sm text-gray-600">
+                              This alert is assigned to the <span className="font-semibold">{alert.role}</span> team. You don't have permission to manage it.
+                            </span>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
